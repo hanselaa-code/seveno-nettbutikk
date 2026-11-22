@@ -1,0 +1,11 @@
+{
+  "parameters": {
+    "gemini_model": {
+      "defaultValue": {
+        "value": "gemini-3.8-flash"
+      },
+      "description": "Aktiv Gemini-modell for Seveno AI-hjelpebot (styrt via Firebase Remote Config).",
+      "valueType": "STRING"
+    }
+  }
+}

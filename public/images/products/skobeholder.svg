@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" role="img" aria-labelledby="shoe-title shoe-desc">
+  <title id="shoe-title">Akryl gjennomsiktig skobeholder — Seveno home</title>
+  <desc id="shoe-desc">Krystallklar stabelbar oppbevaringsboks i optisk akryl med magnetisk frontdør og minimalistisk sko inni.</desc>
+  <defs>
+    <radialGradient id="homeBg" cx="50%" cy="42%" r="62%">
+      <stop offset="0%" stop-color="#FEFEFC" />
+      <stop offset="100%" stop-color="#F1ECE1" />
+    </radialGradient>
+    <linearGradient id="acrylicPane" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.72" />
+      <stop offset="50%" stop-color="#FAF8F4" stop-opacity="0.28" />
+      <stop offset="100%" stop-color="#E4DDD0" stop-opacity="0.45" />
+    </linearGradient>
+    <linearGradient id="bronzeMag" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7D5832" />
+      <stop offset="100%" stop-color="#E7C194" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="600" fill="url(#homeBg)" />
+  <line x1="90" y1="490" x2="710" y2="490" stroke="#E4DDD0" stroke-width="1.5" />
+  <polygon points="180,446 470,490 630,398 340,356" fill="#231C16" fill-opacity="0.08" />
+
+  <polygon points="340,156 620,198 620,388 340,346" fill="#FAF8F4" fill-opacity="0.55" stroke="#CFC6B7" stroke-width="2" />
+  <polygon points="180,432 470,476 620,388 340,346" fill="#EAE3D5" fill-opacity="0.65" stroke="#BDB3A3" stroke-width="2" />
+
+  <g transform="translate(275,286)">
+    <path d="M25 104c18 12 182 14 202-2 8-7 6-20-6-23-30-8-52-24-74-46-12-12-22-12-34-2-14 11-28 14-44 6-14-7-28-2-36 14-10 20-20 42-8 53Z" fill="#3A2E24" />
+    <path d="M22 103c22 14 185 15 206 0l-2 12c-24 14-184 14-205-1l1-11Z" fill="#FEFEFC" stroke="#CFC6B7" stroke-width="1.5" />
+    <line x1="126" y1="45" x2="146" y2="55" stroke="#BC8A59" stroke-width="2.5" stroke-linecap="round" />
+    <line x1="136" y1="53" x2="156" y2="63" stroke="#BC8A59" stroke-width="2.5" stroke-linecap="round" />
+    <line x1="146" y1="61" x2="166" y2="71" stroke="#BC8A59" stroke-width="2.5" stroke-linecap="round" />
+  </g>
+
+  <polygon points="180,242 340,156 340,346 180,432" fill="url(#acrylicPane)" stroke="#9C9283" stroke-width="2" />
+  <rect x="240" y="290" width="24" height="6" rx="3" transform="skewY(-28)" fill="#9C9283" fill-opacity="0.55" />
+  <rect x="240" y="308" width="24" height="6" rx="3" transform="skewY(-28)" fill="#9C9283" fill-opacity="0.55" />
+
+  <polygon points="470,286 620,198 620,388 470,476" fill="url(#acrylicPane)" stroke="#9C9283" stroke-width="2" />
+  <polygon points="180,242 470,286 620,198 340,156" fill="#FFFFFF" fill-opacity="0.52" stroke="#9C9283" stroke-width="2" />
+
+  <polygon points="180,242 470,286 470,476 180,432" fill="url(#acrylicPane)" stroke="#7D5832" stroke-opacity="0.55" stroke-width="2.2" />
+  <polygon points="215,256 262,263 218,426 194,422" fill="#FFFFFF" fill-opacity="0.42" />
+  <polygon points="278,266 296,269 252,431 236,428" fill="#FFFFFF" fill-opacity="0.28" />
+
+  <rect x="194" y="264" width="12" height="18" rx="3" fill="url(#bronzeMag)" />
+  <rect x="442" y="302" width="12" height="18" rx="3" fill="url(#bronzeMag)" />
+  <ellipse cx="325" cy="364" rx="14" ry="8" fill="#FEFEFC" fill-opacity="0.7" stroke="#996E44" stroke-width="2" />
+</svg>

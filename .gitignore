@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build & typecheck caches
+dist/
+dist-ssr/
+*.tsbuildinfo
+coverage/
+
+# Environment & secrets (keep .env.example)
+.env
+.env.*
+!.env.example
+*.local
+serviceAccountKey*.json
+*service-account*.json
+firebase-adminsdk-*.json
+*.pem
+*.key
+
+# Firebase & tooling caches
+.firebase/
+*-debug.log*
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+database-debug.log*
+
+# Agent & E2E artifacts
+.agents/
+playwright-report/
+test-results/
+
+# OS / Editor
+.DS_Store
+Thumbs.db

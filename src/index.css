@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+:root {
+  --bg-canvas: #FEFEFC;
+  --bg-ivory: #FAF8F4;
+  --bg-linen: #F3EFE7;
+  --border-sand: #E4DDD0;
+
+  --text-espresso: #231C16;
+  --text-charcoal: #3A2E24;
+  --text-taupe: #5C4B3B;
+
+  --accent-bronze: #7D5832;
+  --accent-bronze-deep: #6D4B28;
+  --accent-bronze-mid: #996E44;
+  --accent-champagne: #BC8A59;
+  --accent-gold-light: #E7C194;
+  --gradient-bronze: linear-gradient(135deg, #6D4B28 0%, #996E44 45%, #BC8A59 75%, #E7C194 100%);
+
+  --status-success: #2D5A43;
+  --status-error: #A63D2F;
+  --status-warning: #8C5A1E;
+
+  --shadow-nordic: 0 8px 30px rgba(35, 28, 22, 0.06);
+}
+
+@theme {
+  --color-canvas: #FEFEFC;
+  --color-ivory: #FAF8F4;
+  --color-linen: #F3EFE7;
+  --color-sand: #E4DDD0;
+
+  --color-espresso: #231C16;
+  --color-charcoal: #3A2E24;
+  --color-taupe: #5C4B3B;
+
+  --color-bronze: #7D5832;
+  --color-bronze-deep: #6D4B28;
+  --color-bronze-mid: #996E44;
+  --color-champagne: #BC8A59;
+  --color-gold-light: #E7C194;
+
+  --color-success: #2D5A43;
+  --color-error: #A63D2F;
+  --color-warning: #8C5A1E;
+
+  --font-serif: "Cormorant Garamond", Georgia, serif;
+  --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+
+  --shadow-nordic: 0 8px 30px rgba(35, 28, 22, 0.06);
+}
+
+@layer base {
+  html {
+    background-color: var(--bg-canvas);
+    color: var(--text-espresso);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: var(--bg-canvas);
+    color: var(--text-espresso);
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-serif);
+    color: var(--text-espresso);
+  }
+}

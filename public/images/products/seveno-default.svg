@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" role="img" aria-labelledby="def-title def-desc">
+  <title id="def-title">Seveno produktillustrasjon</title>
+  <desc id="def-desc">Minimalistisk bronse- og elfenben-emblem for Seveno-produkter.</desc>
+  <defs>
+    <linearGradient id="defBronze" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6D4B28" />
+      <stop offset="45%" stop-color="#996E44" />
+      <stop offset="75%" stop-color="#BC8A59" />
+      <stop offset="100%" stop-color="#E7C194" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="600" fill="#F3EFE7" />
+  <rect x="64" y="56" width="672" height="488" rx="8" fill="#FAF8F4" stroke="#E4DDD0" stroke-width="1.5" />
+  <circle cx="400" cy="276" r="108" fill="none" stroke="#E4DDD0" stroke-width="1.5" />
+  <path
+    fill="url(#defBronze)"
+    fill-rule="evenodd"
+    d="M400 198c-45.5 0-78 32.5-78 78s32.5 78 78 78 78-32.5 78-78-32.5-78-78-78Zm0 11c33 0 56 28 56 67s-23 67-56 67-56-28-56-67 23-67 56-67Z"
+  />
+  <path
+    fill="url(#defBronze)"
+    d="M369 235c8 4.4 17 5.5 30 5.5h33c1.8 0 2.9 1.5 1.8 3.2-17 24.5-29.5 49.8-35.2 78.6-1 5-5.4 8.2-10.5 8.2h-6.6c-1.4 0-2.5-1.4-2.1-2.8 7.7-28 21.8-53.8 40.3-76.2h-26.9c-10.2 0-17.4 2.5-22.2 8-1.1 1.1-2.9.4-2.9-1.1l1.3-23.4Z"
+  />
+  <text
+    x="400"
+    y="442"
+    text-anchor="middle"
+    font-family="Georgia, serif"
+    font-size="22"
+    letter-spacing="10"
+    fill="#5C4B3B"
+  >SEVENO</text>
+</svg>
