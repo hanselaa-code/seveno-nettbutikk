@@ -3,7 +3,7 @@
 En produksjonsklar, norskspråklig nettbutikk for **Seveno** bygget med et nordisk, moderne designuttrykk i varme elfenben-, lin-, espresso- og bronsetoner inspirert av Seveno-logoen.
 
 - **Offentlig GitHub-repository**: https://github.com/hanselaa-code/seveno-nettbutikk
-- **Live Firebase-nettadresse**: *Avventer Firebase-prosjektopprettelse (se status/instruksjoner nedenfor)*
+- **Live Firebase-nettadresse**: https://spill-2p-math.web.app (Firebase-prosjekt: `spill-2p-math`)
 
 ---
 
@@ -108,25 +108,25 @@ npx playwright test
 
 ## Publisering til Firebase
 
-1. Opprett Firebase-prosjekt og registrer Web App:
+Prosjektet er konfigurert for Spark-plan-prosjektet `spill-2p-math` (`.firebaserc` og `firebase.json`):
+
+1. Velg Firebase-prosjekt og registrer Web App (`Seveno Nettbutikk`):
    ```bash
-   firebase projects:create <project-id> --display-name "Seveno Nettbutikk"
-   firebase use <project-id>
-   firebase apps:create web "Seveno Nettbutikk" --project <project-id>
+   npx -y firebase-tools@latest use spill-2p-math
+   npx -y firebase-tools@latest apps:create web "Seveno Nettbutikk" --project spill-2p-math
    ```
-2. Opprett Standard `(default)` Cloud Firestore-database i Europa og distribuer regler/indekser:
+2. Distribuer Cloud Firestore-regler og -indekser til `(default)`-databasen:
    ```bash
-   firebase firestore:databases:create "(default)" --location="eur3" --edition="standard" --project <project-id>
-   firebase deploy --only "firestore:rules,firestore:indexes" --project <project-id>
+   npx -y firebase-tools@latest deploy --only "firestore:rules,firestore:indexes" --force --project spill-2p-math
    ```
-3. Aktiver Auth-tilbydere, Firebase AI Logic (`gemini-developer-api`) og Remote Config (`gemini_model = "gemini-3.8-flash"`):
+3. Aktiver Auth-tilbydere (`anonymous`, `emailPassword`, `googleSignIn`), Firebase AI Logic (`gemini-developer-api`) og Remote Config (`gemini_model = "gemini-3.8-flash"`):
    ```bash
-   firebase deploy --only auth,remoteconfig --force --project <project-id>
+   npx -y firebase-tools@latest deploy --only auth,remoteconfig --force --project spill-2p-math
    ```
    *(Aktiver AI Logic-tilbyderen `gemini-developer-api` og bekreft App Check-status i Firebase Console / CLI).*
 4. Seed startproduktene (`army-sekk`, `akryl-gjennomsiktig-skobeholder`, `pergola`) som administrator til `products`-samlingen i Firestore.
-5. Bygg og publiser til Firebase Hosting:
+5. Bygg (uten `VITE_FIREBASE_API_KEY` i `.env`, slik at runtime henter `/__/firebase/init.json`) og publiser til Firebase Hosting:
    ```bash
    npm run build
-   firebase deploy --only hosting --project <project-id>
+   npx -y firebase-tools@latest deploy --only hosting --project spill-2p-math
    ```
