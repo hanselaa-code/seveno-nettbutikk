@@ -6,9 +6,16 @@ import {
   getProductRepository,
 } from '../repositories/productRepository';
 import type { IProductRepository } from '../repositories/productRepository';
-import { getStarterProducts, seedCatalog } from '../repositories/seedCatalog';
+import {
+  clearCatalogIntentionallyEmptied,
+  ensureAdminColdStartSeed,
+  getStarterProducts,
+  isCatalogIntentionallyEmptied,
+  seedCatalog,
+} from '../repositories/seedCatalog';
 import { CATEGORIES } from '../types/domain';
 import type { CategoryMeta, CategorySlug, Product } from '../types/domain';
+import { useOptionalAuth } from './AuthContext';
 
 export interface CatalogContextValue {
   products: Product[];
@@ -51,9 +58,26 @@ export function CatalogProvider({ children, productRepository }: CatalogProvider
   const [error, setError] = useState<string | null>(null);
   const [isUsingFallback, setIsUsingFallback] = useState<boolean>(!hasRemoteSource);
 
+  const optionalAuth = useOptionalAuth();
+  const authLoading = optionalAuth?.loading ?? false;
+  const isAuthorizedAdmin = Boolean(
+    optionalAuth?.user && !optionalAuth.user.isAnonymous && optionalAuth.isAdmin,
+  );
+
   const isMountedRef = useRef(true);
   const loadRequestIdRef = useRef(0);
-  const hasAttemptedInitialSeedRef = useRef(false);
+  const hasAttemptedUnauthSeedRef = useRef(false);
+  const hasAttemptedAdminSeedRef = useRef(false);
+  const hasConfirmedCatalogRef = useRef(false);
+  const unauthSeedFailedRef = useRef(false);
+  const hasStartedInitialLoadRef = useRef(false);
+  const authLoadingRef = useRef(authLoading);
+  authLoadingRef.current = authLoading;
+  const isAuthorizedAdminRef = useRef(isAuthorizedAdmin);
+  isAuthorizedAdminRef.current = isAuthorizedAdmin;
+  const prevAuthLoadingRef = useRef(authLoading);
+  const prevIsAuthorizedAdminRef = useRef(isAuthorizedAdmin);
+
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -87,33 +111,78 @@ export function CatalogProvider({ children, productRepository }: CatalogProvider
         setError(null);
       }
 
+      let waitingForAuthSettlement = false;
+
       try {
         let active = await repo.listActive();
         if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
 
-        const shouldAttemptSeed =
-          active.length === 0 &&
-          options?.allowInitialSeed === true &&
-          !hasAttemptedInitialSeedRef.current;
-
-        if (shouldAttemptSeed) {
-          hasAttemptedInitialSeedRef.current = true;
-          try {
-            const seedResult = await seedCatalog(repo);
-            if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
-            if (seedResult.created > 0) {
-              active = await repo.listActive();
-              if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+        if (active.length > 0) {
+          clearCatalogIntentionallyEmptied();
+          hasConfirmedCatalogRef.current = true;
+          hasAttemptedAdminSeedRef.current = true;
+          unauthSeedFailedRef.current = false;
+        } else if (isCatalogIntentionallyEmptied()) {
+          hasConfirmedCatalogRef.current = true;
+          unauthSeedFailedRef.current = false;
+        } else if (
+          !isAuthorizedAdminRef.current &&
+          authLoadingRef.current &&
+          options?.allowInitialSeed === true
+        ) {
+          waitingForAuthSettlement = true;
+          return;
+        } else if (options?.allowInitialSeed === true) {
+          if (isAuthorizedAdminRef.current) {
+            if (!hasAttemptedAdminSeedRef.current) {
+              hasAttemptedAdminSeedRef.current = true;
+              try {
+                const seedResult = await ensureAdminColdStartSeed(repo);
+                if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+                hasConfirmedCatalogRef.current = true;
+                unauthSeedFailedRef.current = false;
+                if (seedResult.seeded) {
+                  active = await repo.listActive();
+                  if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+                }
+              } catch {
+                if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+                setProducts(getStarterProducts());
+                setIsUsingFallback(true);
+                setError(null);
+                return;
+              }
             }
-          } catch {
-            if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+          } else if (!hasAttemptedUnauthSeedRef.current) {
+            hasAttemptedUnauthSeedRef.current = true;
+            try {
+              const seedResult = await seedCatalog(repo);
+              if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+              hasConfirmedCatalogRef.current = true;
+              unauthSeedFailedRef.current = false;
+              if (seedResult.created > 0) {
+                active = await repo.listActive();
+                if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+              }
+            } catch {
+              if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+              unauthSeedFailedRef.current = true;
+              setProducts(getStarterProducts());
+              setIsUsingFallback(true);
+              setError(null);
+              return;
+            }
+          } else if (unauthSeedFailedRef.current) {
             setProducts(getStarterProducts());
             setIsUsingFallback(true);
             setError(null);
             return;
           }
-        } else if (active.length > 0) {
-          hasAttemptedInitialSeedRef.current = true;
+        } else if (!isAuthorizedAdminRef.current && unauthSeedFailedRef.current) {
+          setProducts(getStarterProducts());
+          setIsUsingFallback(true);
+          setError(null);
+          return;
         }
 
         if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
@@ -126,7 +195,11 @@ export function CatalogProvider({ children, productRepository }: CatalogProvider
         setIsUsingFallback(true);
         setError(null);
       } finally {
-        if (isMountedRef.current && requestId === loadRequestIdRef.current) {
+        if (
+          !waitingForAuthSettlement &&
+          isMountedRef.current &&
+          requestId === loadRequestIdRef.current
+        ) {
           setLoading(false);
         }
       }
@@ -135,23 +208,50 @@ export function CatalogProvider({ children, productRepository }: CatalogProvider
   );
 
   const refreshCatalog = useCallback(async () => {
-    hasAttemptedInitialSeedRef.current = true;
+    hasAttemptedUnauthSeedRef.current = true;
+    hasAttemptedAdminSeedRef.current = true;
     await loadCatalog({ allowInitialSeed: false });
   }, [loadCatalog]);
 
   useEffect(() => {
-    if (hasRemoteSource) {
+    if (!hasRemoteSource) {
+      const repo = resolveRepository();
+      if (repo instanceof LocalProductRepository) {
+        setProducts(repo.listActiveSync());
+        setLoading(false);
+        setIsUsingFallback(true);
+        setError(null);
+      }
+      return;
+    }
+
+    const wasAuthLoading = prevAuthLoadingRef.current;
+    const wasAuthorizedAdmin = prevIsAuthorizedAdminRef.current;
+    prevAuthLoadingRef.current = authLoading;
+    prevIsAuthorizedAdminRef.current = isAuthorizedAdmin;
+
+    if (!hasStartedInitialLoadRef.current) {
+      hasStartedInitialLoadRef.current = true;
       void loadCatalog({ allowInitialSeed: true });
       return;
     }
-    const repo = resolveRepository();
-    if (repo instanceof LocalProductRepository) {
-      setProducts(repo.listActiveSync());
-      setLoading(false);
-      setIsUsingFallback(true);
-      setError(null);
+
+    if (authLoading) {
+      return;
     }
-  }, [hasRemoteSource, loadCatalog, resolveRepository]);
+
+    const authJustSettled = wasAuthLoading && !authLoading;
+    const adminJustElevated = !wasAuthorizedAdmin && isAuthorizedAdmin;
+
+    if (adminJustElevated && !hasAttemptedAdminSeedRef.current) {
+      void loadCatalog({ allowInitialSeed: true });
+      return;
+    }
+
+    if (authJustSettled && !hasConfirmedCatalogRef.current) {
+      void loadCatalog({ allowInitialSeed: true });
+    }
+  }, [authLoading, hasRemoteSource, isAuthorizedAdmin, loadCatalog, resolveRepository]);
 
   const getProductByIdOrSlug = useCallback(
     (idOrSlug: string): Product | undefined => {

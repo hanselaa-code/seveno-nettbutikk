@@ -37,6 +37,7 @@ import {
   askAiAssistant,
   createProductViaAdmin,
   deleteProductViaAdmin,
+  ensureStarterCatalogReady,
   fillCheckoutCustomer,
   INVALID_EMAILS,
   INVALID_POSTAL_CODES,
@@ -861,6 +862,10 @@ test.describe('Tier 2 — Boundary & Corner Cases (F-01 through F-10)', () => {
   });
 
   test.describe('F-08 Boundaries: Checkout Validation & Tamper Guards', () => {
+    test.beforeAll(async ({ browser }) => {
+      await ensureStarterCatalogReady(browser);
+    });
+
     test('T2-F08-01 Empty cart on /utsjekk blocks submission with Norwegian notice', async ({
       page,
     }) => {
@@ -971,6 +976,10 @@ test.describe('Tier 2 — Boundary & Corner Cases (F-01 through F-10)', () => {
   });
 
   test.describe('F-09 Boundaries: Payment Provider Resilience', () => {
+    test.beforeAll(async ({ browser }) => {
+      await ensureStarterCatalogReady(browser);
+    });
+
     test('T2-F09-01 Default provider selected or explicit selection enforced on /utsjekk', async ({
       page,
     }) => {
@@ -1082,6 +1091,10 @@ test.describe('Tier 2 — Boundary & Corner Cases (F-01 through F-10)', () => {
   });
 
   test.describe('F-10 Boundaries: AI Assistant Edge Cases', () => {
+    test.beforeAll(async ({ browser }) => {
+      await ensureStarterCatalogReady(browser);
+    });
+
     test('T2-F10-01 Empty or whitespace-only AI prompt ignored/disabled', async ({ page }) => {
       await page.goto('/');
       await getAiLauncher(page).click();

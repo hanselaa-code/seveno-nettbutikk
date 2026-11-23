@@ -30,6 +30,7 @@ import {
   applyAiAppCheckDebugToken,
   createProductViaAdmin,
   deleteProductViaAdmin,
+  ensureStarterCatalogReady,
   fillCheckoutCustomer,
   makeAdminTestProduct,
   makeRunId,
@@ -41,6 +42,10 @@ import {
 } from '../helpers/testdata';
 
 test.describe('Tier 5 — White-Box Adversarial Hardening', () => {
+  test.beforeAll(async ({ browser }) => {
+    await ensureStarterCatalogReady(browser);
+  });
+
   test.beforeEach(async ({ page }) => {
     await applyAiAppCheckDebugToken(page);
   });

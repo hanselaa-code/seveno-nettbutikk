@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ADMIN_ALLOWLIST_EMAIL,
   AuthProvider,
@@ -21,9 +21,15 @@ import {
   getProductRepository,
 } from '../../src/repositories/productRepository';
 import type { IProductRepository } from '../../src/repositories/productRepository';
-import { getStarterProducts } from '../../src/repositories/seedCatalog';
-import { DEFAULT_PRODUCT_IMAGE } from '../../src/types/domain';
-import type { Order, Product } from '../../src/types/domain';
+import { getStarterProducts, seedCatalog } from '../../src/repositories/seedCatalog';
+import { CATEGORY_MAP, DEFAULT_PRODUCT_IMAGE } from '../../src/types/domain';
+import type {
+  CategorySlug,
+  CreateProductInput,
+  Order,
+  Product,
+  UpdateProductInput,
+} from '../../src/types/domain';
 
 const authMocks = vi.hoisted(() => ({
   onAuthStateChanged: vi.fn(),
@@ -1908,5 +1914,464 @@ describe('M4 Iteration 2 Regression & Hardening Tests', () => {
       resolveDelete();
       await Promise.resolve();
     });
+  });
+});
+
+function createSimulatedRemoteProductRepo(options: {
+  initialAdmin: boolean;
+  initialProducts?: Product[];
+}) {
+  let isAdmin = options.initialAdmin;
+  const store = new Map<string, Product>(
+    (options.initialProducts ?? []).map((product) => [product.id, { ...product }]),
+  );
+
+  const createSpy = vi.fn(async (input: CreateProductInput): Promise<Product> => {
+    if (!isAdmin) {
+      throw Object.assign(new Error('Missing or insufficient permissions.'), {
+        code: 'permission-denied',
+      });
+    }
+    const id = input.id ?? `remote-prod-${store.size + 1}`;
+    const existing = store.get(id);
+    if (existing) {
+      // Mirrors firestore.rules allow update checking immutable createdAt with serverTimestamp()
+      throw Object.assign(new Error('Missing or insufficient permissions.'), {
+        code: 'permission-denied',
+      });
+    }
+    const nowIso = new Date().toISOString();
+    const product: Product = {
+      id,
+      slug: input.slug ?? id,
+      title: input.title,
+      categorySlug: input.categorySlug,
+      categoryName: CATEGORY_MAP[input.categorySlug].name,
+      description: input.description,
+      priceNok: input.priceNok,
+      stock: input.stock,
+      imageUrl: input.imageUrl ?? DEFAULT_PRODUCT_IMAGE,
+      specs: input.specs ? [...input.specs] : [],
+      active: input.active ?? true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    store.set(id, product);
+    return product;
+  });
+
+  const listAllSpy = vi.fn(async (): Promise<Product[]> => {
+    if (!isAdmin) {
+      throw Object.assign(new Error('Missing or insufficient permissions.'), {
+        code: 'permission-denied',
+      });
+    }
+    return Array.from(store.values()).sort((a, b) => a.title.localeCompare(b.title));
+  });
+
+  const repo: IProductRepository = {
+    listAll: listAllSpy,
+    listActive: vi.fn(async () =>
+      Array.from(store.values())
+        .filter((p) => p.active)
+        .sort((a, b) => a.title.localeCompare(b.title)),
+    ),
+    listByCategory: vi.fn(async (categorySlug: CategorySlug) =>
+      Array.from(store.values())
+        .filter((p) => p.active && p.categorySlug === categorySlug)
+        .sort((a, b) => a.title.localeCompare(b.title)),
+    ),
+    getById: vi.fn(async (id: string) => {
+      const found = store.get(id) ?? null;
+      if (!found) {
+        return null;
+      }
+      if (!isAdmin && !found.active) {
+        throw Object.assign(new Error('Missing or insufficient permissions.'), {
+          code: 'permission-denied',
+        });
+      }
+      return found;
+    }),
+    getBySlug: vi.fn(async (slug: string) => {
+      return Array.from(store.values()).find((p) => p.active && p.slug === slug) ?? null;
+    }),
+    create: createSpy,
+    update: vi.fn(async (id: string, input: UpdateProductInput) => {
+      if (!isAdmin) {
+        throw Object.assign(new Error('Missing or insufficient permissions.'), {
+          code: 'permission-denied',
+        });
+      }
+      const existing = store.get(id);
+      if (!existing) {
+        throw new Error(`Produkt med ID "${id}" ble ikke funnet.`);
+      }
+      const nextCategorySlug = input.categorySlug ?? existing.categorySlug;
+      const updated: Product = {
+        ...existing,
+        ...input,
+        categorySlug: nextCategorySlug,
+        categoryName: CATEGORY_MAP[nextCategorySlug].name,
+        updatedAt: new Date().toISOString(),
+      };
+      store.set(id, updated);
+      return updated;
+    }),
+    delete: vi.fn(async (id: string) => {
+      if (!isAdmin) {
+        throw Object.assign(new Error('Missing or insufficient permissions.'), {
+          code: 'permission-denied',
+        });
+      }
+      store.delete(id);
+    }),
+  };
+
+  return {
+    repo,
+    createSpy,
+    listAllSpy,
+    setAdmin(nextAdmin: boolean) {
+      isAdmin = nextAdmin;
+    },
+    size() {
+      return store.size;
+    },
+  };
+}
+
+function ColdStartCatalogProbe() {
+  const { products, loading, isUsingFallback, refreshCatalog } = useCatalog();
+  return (
+    <div>
+      <span data-testid="catalog-loading">{String(loading)}</span>
+      <span data-testid="catalog-fallback">{String(isUsingFallback)}</span>
+      <span data-testid="catalog-count">{products.length}</span>
+      <span data-testid="catalog-titles">{products.map((p) => p.title).join('|')}</span>
+      <button type="button" onClick={() => void refreshCatalog()}>
+        Oppdater katalog
+      </button>
+    </div>
+  );
+}
+
+describe('Victory Audit Cold-Start Seeding & Non-Reseed Regression Tests', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('seeds starter catalog once when admin signs in on /admin after unauthenticated fallback and updates CatalogContext to live catalog', async () => {
+    const simulated = createSimulatedRemoteProductRepo({ initialAdmin: false });
+    const adminUser = {
+      uid: 'admin-cold-start',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+
+    const user = userEvent.setup({ delay: null });
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/']}>
+        <AuthProvider initialUser={null} initialIsAdmin={false}>
+          <CatalogProvider productRepository={simulated.repo}>
+            <nav>
+              <Link to="/admin">Admin</Link>
+              <Link to="/">Forside</Link>
+            </nav>
+            <ColdStartCatalogProbe />
+            <Routes>
+              <Route path="/" element={<div>Storefront</div>} />
+              <Route path="/admin" element={<AdminPage productRepository={simulated.repo} />} />
+            </Routes>
+          </CatalogProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    // 1. Unauthenticated storefront load uses starter fallback while backend remains empty (0 docs)
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-loading')).toHaveTextContent('false');
+    });
+    expect(screen.getByTestId('catalog-fallback')).toHaveTextContent('true');
+    expect(screen.getByTestId('catalog-count')).toHaveTextContent('3');
+    expect(simulated.size()).toBe(0);
+
+    // 2. Navigate to /admin, then authenticate as admin
+    await user.click(screen.getByRole('link', { name: 'Admin' }));
+    expect(screen.getByRole('heading', { name: 'Administratorinnlogging' })).toBeInTheDocument();
+
+    simulated.setAdmin(true);
+    rerender(
+      <MemoryRouter initialEntries={['/admin']}>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <CatalogProvider productRepository={simulated.repo}>
+            <nav>
+              <Link to="/admin">Admin</Link>
+              <Link to="/">Forside</Link>
+            </nav>
+            <ColdStartCatalogProbe />
+            <Routes>
+              <Route path="/" element={<div>Storefront</div>} />
+              <Route path="/admin" element={<AdminPage productRepository={simulated.repo} />} />
+            </Routes>
+          </CatalogProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    // 3. Starter catalog is seeded once into backend and visible in Admin + live CatalogContext
+    await waitFor(
+      () => {
+        expect(screen.getByRole('tab', { name: /Produkter \(3\)/i })).toBeInTheDocument();
+      },
+      { timeout: 3000 },
+    );
+
+    const desktopList = screen.getByTestId('admin-products-desktop');
+    expect(within(desktopList).getByText('Army sekk')).toBeInTheDocument();
+    expect(within(desktopList).getByText('Akryl gjennomsiktig skobeholder')).toBeInTheDocument();
+    expect(within(desktopList).getByText('Pergola')).toBeInTheDocument();
+
+    expect(simulated.size()).toBe(3);
+    expect(simulated.createSpy).toHaveBeenCalledTimes(4); // 1 rejected unauth attempt (fast-fail on first item) + 3 successful admin writes
+
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-fallback')).toHaveTextContent('false');
+      expect(screen.getByTestId('catalog-count')).toHaveTextContent('3');
+    });
+  });
+
+  it('deduplicates concurrent CatalogContext + AdminPage cold-start seeding and recovers from concurrent create race', async () => {
+    const simulated = createSimulatedRemoteProductRepo({ initialAdmin: true });
+    const adminUser = {
+      uid: 'admin-concurrent-seed',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/admin']}>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <CatalogProvider productRepository={simulated.repo}>
+            <ColdStartCatalogProbe />
+            <AdminPage productRepository={simulated.repo} />
+          </CatalogProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(3\)/i })).toBeInTheDocument();
+      expect(screen.getByTestId('catalog-fallback')).toHaveTextContent('false');
+    });
+
+    expect(simulated.size()).toBe(3);
+    // Single-flight lock ensures create() is called exactly once per starter product
+    expect(simulated.createSpy).toHaveBeenCalledTimes(3);
+
+    // Also verify seedCatalog handles a concurrent create() race returning permission-denied/already-exists
+    const existingStarter = getStarterProducts();
+    const raceRepo: IProductRepository = {
+      listAll: vi.fn().mockResolvedValue(existingStarter),
+      listActive: vi.fn().mockResolvedValue(existingStarter),
+      listByCategory: vi.fn().mockResolvedValue([]),
+      getById: vi
+        .fn()
+        // First pass before create() returns null (simulating race window)
+        .mockResolvedValueOnce(null)
+        // Re-query after create() race finds doc created by concurrent caller
+        .mockResolvedValueOnce(existingStarter[0])
+        .mockResolvedValueOnce(existingStarter[1])
+        .mockResolvedValueOnce(existingStarter[2]),
+      getBySlug: vi.fn().mockResolvedValue(null),
+      create: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error('Missing or insufficient permissions.'), {
+            code: 'permission-denied',
+          }),
+        ),
+      update: vi.fn(),
+      delete: vi.fn(),
+    };
+
+    const raceResult = await seedCatalog(raceRepo);
+    expect(raceResult.created).toBe(0);
+    expect(raceResult.skipped).toBe(3);
+    expect(raceResult.products).toHaveLength(3);
+  });
+
+  it('does NOT silently re-seed starter products after intentional admin deactivation or deletion of all products', async () => {
+    const simulated = createSimulatedRemoteProductRepo({
+      initialAdmin: true,
+      initialProducts: getStarterProducts(),
+    });
+    const adminUser = {
+      uid: 'admin-non-reseed',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+    const user = userEvent.setup({ delay: null });
+
+    // Part A: Deactivate all 3 starter products
+    const viewA = render(
+      <MemoryRouter initialEntries={['/admin']}>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <CatalogProvider productRepository={simulated.repo}>
+            <AdminPage productRepository={simulated.repo} />
+          </CatalogProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(3\)/i })).toBeInTheDocument();
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      const deactivateBtns = within(screen.getByTestId('admin-products-desktop')).getAllByRole(
+        'button',
+        { name: 'Deaktiver' },
+      );
+      await user.click(deactivateBtns[0]);
+      await waitFor(() => {
+        expect(
+          within(screen.getByTestId('admin-products-desktop')).queryAllByRole('button', {
+            name: 'Deaktiver',
+          }),
+        ).toHaveLength(2 - i);
+      });
+    }
+    viewA.unmount();
+
+    // Reload /admin and / while all 3 products remain deactivated -> must NOT re-seed
+    const viewAReload = render(
+      <MemoryRouter initialEntries={['/admin']}>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <CatalogProvider productRepository={simulated.repo}>
+            <ColdStartCatalogProbe />
+            <AdminPage productRepository={simulated.repo} />
+          </CatalogProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(3\)/i })).toBeInTheDocument();
+      expect(screen.getByTestId('catalog-loading')).toHaveTextContent('false');
+    });
+    expect(screen.getByTestId('catalog-count')).toHaveTextContent('0');
+    expect(screen.getByTestId('catalog-fallback')).toHaveTextContent('false');
+    expect(simulated.createSpy).not.toHaveBeenCalled();
+    viewAReload.unmount();
+
+    // Part B: Delete all 3 products -> reload /admin and / -> create 1 custom product -> reload
+    const viewB = render(
+      <MemoryRouter initialEntries={['/admin']}>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <CatalogProvider productRepository={simulated.repo}>
+            <AdminPage productRepository={simulated.repo} />
+          </CatalogProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(3\)/i })).toBeInTheDocument();
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      const deleteBtns = within(screen.getByTestId('admin-products-desktop')).getAllByRole(
+        'button',
+        { name: 'Slett' },
+      );
+      await user.click(deleteBtns[0]);
+      await waitFor(() => {
+        expect(
+          screen.getByRole('tab', { name: new RegExp(`Produkter \\(${2 - i}\\)`, 'i') }),
+        ).toBeInTheDocument();
+      });
+    }
+    expect(screen.getByText('Ingen produkter registrert i katalogen ennå.')).toBeInTheDocument();
+    viewB.unmount();
+
+    // Simulate full page reload on /admin and / after deleting all products
+    const viewBReload = render(
+      <MemoryRouter initialEntries={['/admin']}>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <CatalogProvider productRepository={simulated.repo}>
+            <ColdStartCatalogProbe />
+            <AdminPage productRepository={simulated.repo} />
+          </CatalogProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Ingen produkter registrert i katalogen ennå.')).toBeInTheDocument();
+      expect(screen.getByTestId('catalog-loading')).toHaveTextContent('false');
+    });
+    expect(screen.getByRole('tab', { name: /Produkter \(0\)/i })).toBeInTheDocument();
+    expect(screen.getByTestId('catalog-count')).toHaveTextContent('0');
+    expect(screen.getByTestId('catalog-fallback')).toHaveTextContent('false');
+    expect(simulated.createSpy).not.toHaveBeenCalled();
+
+    // Also click Oppdater katalog on storefront -> stays 0
+    await user.click(screen.getByRole('button', { name: 'Oppdater katalog' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-count')).toHaveTextContent('0');
+    });
+    expect(simulated.createSpy).not.toHaveBeenCalled();
+
+    // Create 1 custom product 'Nordisk Ullpledd' after emptying
+    await user.type(screen.getByLabelText('Tittel'), 'Nordisk Ullpledd');
+    await user.type(screen.getByLabelText('Pris (NOK)'), '1290');
+    fireEvent.change(screen.getByLabelText('Beskrivelse'), {
+      target: { value: 'Mykt nordisk ullpledd vevet i 100 % merinoull.' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Lagre produkt' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(1\)/i })).toBeInTheDocument();
+    });
+    expect(
+      within(screen.getByTestId('admin-products-desktop')).getByText('Nordisk Ullpledd'),
+    ).toBeInTheDocument();
+    expect(simulated.createSpy).toHaveBeenCalledTimes(1);
+    viewBReload.unmount();
+
+    // Reload /admin again -> only custom product 'Nordisk Ullpledd' remains (never re-seeds starters)
+    render(
+      <MemoryRouter initialEntries={['/admin']}>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <CatalogProvider productRepository={simulated.repo}>
+            <ColdStartCatalogProbe />
+            <AdminPage productRepository={simulated.repo} />
+          </CatalogProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(1\)/i })).toBeInTheDocument();
+      expect(screen.getByTestId('catalog-loading')).toHaveTextContent('false');
+    });
+    const finalDesktop = screen.getByTestId('admin-products-desktop');
+    expect(within(finalDesktop).getByText('Nordisk Ullpledd')).toBeInTheDocument();
+    expect(within(finalDesktop).queryByText('Army sekk')).not.toBeInTheDocument();
+    expect(screen.getByTestId('catalog-count')).toHaveTextContent('1');
+    expect(screen.getByTestId('catalog-titles')).toHaveTextContent('Nordisk Ullpledd');
+    expect(simulated.createSpy).toHaveBeenCalledTimes(1);
   });
 });

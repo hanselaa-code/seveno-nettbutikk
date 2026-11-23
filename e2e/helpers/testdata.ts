@@ -1,5 +1,12 @@
-import { expect, type Page } from '@playwright/test';
-import { getAdminConfig, getAiPolicy, getEmulatorAuthUrl, type AdminCredentials } from './env';
+import { expect, type Browser, type Page } from '@playwright/test';
+import {
+  getAdminConfig,
+  getAiPolicy,
+  getEmulatorAuthUrl,
+  getEmulatorFirestoreUrl,
+  getTargetMode,
+  type AdminCredentials,
+} from './env';
 import {
   getAdminLoginFields,
   getAdminProductFormFields,
@@ -214,6 +221,49 @@ export async function signInAdmin(page: Page, creds: AdminCredentials): Promise<
   await expect(
     page.getByRole('button', { name: /logg ut|opprett produkt|nytt produkt|lagre/i }).first(),
   ).toBeVisible({ timeout: 15_000 });
+}
+
+export async function ensureStarterCatalogReady(browser: Browser): Promise<void> {
+  if (getTargetMode() !== 'emulator') {
+    return;
+  }
+
+  const firestoreUrl = getEmulatorFirestoreUrl();
+  const listRes = await fetch(
+    `${firestoreUrl}/v1/projects/spill-2p-math/databases/(default)/documents/products?pageSize=1`,
+    {
+      headers: {
+        Authorization: 'Bearer owner',
+      },
+    },
+  ).catch(() => null);
+
+  if (listRes && listRes.ok) {
+    const body = (await listRes.json().catch(() => null)) as { documents?: unknown[] } | null;
+    if (Array.isArray(body?.documents) && body.documents.length > 0) {
+      return;
+    }
+  }
+
+  const creds = getAdminConfig();
+  if (!creds.configured) {
+    return;
+  }
+
+  await ensureEmulatorAdmin(creds);
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await signInAdmin(page, creds);
+    await expect(page.locator('main').getByText(/Laster produkter/i)).toBeHidden({
+      timeout: 15_000,
+    });
+    await expect(
+      getVisibleAdminProductRows(page, STARTER_PRODUCTS.armySekk.title).first(),
+    ).toBeVisible({ timeout: 15_000 });
+  } finally {
+    await context.close();
+  }
 }
 
 export async function createProductViaAdmin(

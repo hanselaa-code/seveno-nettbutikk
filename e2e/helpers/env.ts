@@ -120,6 +120,13 @@ export function getEmulatorAuthUrl(): string {
   );
 }
 
+export function getEmulatorFirestoreUrl(): string {
+  return (
+    process.env.E2E_EMULATOR_FIRESTORE_URL?.trim().replace(/\/+$/, '') ||
+    'http://127.0.0.1:8080'
+  );
+}
+
 export function getAdminConfig(): AdminConfig {
   const email = process.env.E2E_ADMIN_EMAIL?.trim();
   const password = process.env.E2E_ADMIN_PASSWORD?.trim();

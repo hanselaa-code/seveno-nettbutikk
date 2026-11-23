@@ -43,6 +43,7 @@ import {
   askAiAssistant,
   createProductViaAdmin,
   deleteProductViaAdmin,
+  ensureStarterCatalogReady,
   fillCheckoutCustomer,
   makeAdminTestProduct,
   makeRunId,
@@ -490,13 +491,12 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
       const adminCreds = await requireAdminCredsOrSkip(testInfo);
       await signInAdmin(page, adminCreds);
 
+      await expect(page.locator('main').getByText(/Laster produkter/i)).toBeHidden({
+        timeout: 15_000,
+      });
       await expect(
-        page
-          .locator('main table, main article')
-          .getByText(STARTER_PRODUCTS.armySekk.title)
-          .locator('visible=true')
-          .first(),
-      ).toBeVisible();
+        getVisibleAdminProductRows(page, STARTER_PRODUCTS.armySekk.title).first(),
+      ).toBeVisible({ timeout: 15_000 });
       await expect(getAdminProductFormFields(page).title).toBeVisible();
     });
 
@@ -697,6 +697,10 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
   });
 
   test.describe('F-08: Checkout & Test Order Persistence', () => {
+    test.beforeAll(async ({ browser }) => {
+      await ensureStarterCatalogReady(browser);
+    });
+
     test('T1-F08-01 /utsjekk renders order summary & Norwegian customer fields', async ({ page }) => {
       await addProductToCartFromCatalog(page, STARTER_PRODUCTS.armySekk);
       await page.goto('/utsjekk');
@@ -771,6 +775,10 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
   });
 
   test.describe('F-09: Payment Provider Adapter Layer (Klarna & Vipps)', () => {
+    test.beforeAll(async ({ browser }) => {
+      await ensureStarterCatalogReady(browser);
+    });
+
     test('T1-F09-01 All 3 payment providers visible on /utsjekk', async ({ page }) => {
       await addProductToCartFromCatalog(page, STARTER_PRODUCTS.armySekk);
       await page.goto('/utsjekk');
@@ -827,6 +835,10 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
   });
 
   test.describe('F-10: Integrated Norwegian Gemini / Firebase AI Bot', () => {
+    test.beforeAll(async ({ browser }) => {
+      await ensureStarterCatalogReady(browser);
+    });
+
     test('T1-F10-01 Cross-site floating AI assistant launcher visible across routes', async ({
       page,
     }) => {

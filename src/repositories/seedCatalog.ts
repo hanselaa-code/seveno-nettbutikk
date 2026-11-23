@@ -90,6 +90,41 @@ export function getStarterProducts(timestamp: string = new Date().toISOString())
   });
 }
 
+const CATALOG_INTENTIONALLY_EMPTIED_KEY = 'seveno_catalog_emptied_v1';
+
+export function isCatalogIntentionallyEmptied(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  try {
+    return window.localStorage.getItem(CATALOG_INTENTIONALLY_EMPTIED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function markCatalogIntentionallyEmptied(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.setItem(CATALOG_INTENTIONALLY_EMPTIED_KEY, 'true');
+  } catch {
+    // Ignore storage quota or access errors
+  }
+}
+
+export function clearCatalogIntentionallyEmptied(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.removeItem(CATALOG_INTENTIONALLY_EMPTIED_KEY);
+  } catch {
+    // Ignore storage access errors
+  }
+}
+
 function isPermissionDeniedError(error: unknown): boolean {
   const code =
     error !== null && typeof error === 'object' && 'code' in error
@@ -102,7 +137,22 @@ function isPermissionDeniedError(error: unknown): boolean {
   );
 }
 
-export async function seedCatalog(productRepo: IProductRepository): Promise<SeedCatalogResult> {
+function isAlreadyExistsOrPermissionDeniedError(error: unknown): boolean {
+  const code =
+    error !== null && typeof error === 'object' && 'code' in error
+      ? String((error as { code: unknown }).code)
+      : '';
+  return (
+    isPermissionDeniedError(error) ||
+    code === 'already-exists' ||
+    code.endsWith('/already-exists') ||
+    (error instanceof Error && /already-exists/i.test(error.message))
+  );
+}
+
+const inFlightSeedMap = new WeakMap<IProductRepository, Promise<SeedCatalogResult>>();
+
+async function runSeedCatalog(productRepo: IProductRepository): Promise<SeedCatalogResult> {
   let created = 0;
   let skipped = 0;
   const products: Product[] = [];
@@ -126,9 +176,26 @@ export async function seedCatalog(productRepo: IProductRepository): Promise<Seed
       continue;
     }
 
-    const createdProduct = await productRepo.create(item);
-    products.push(createdProduct);
-    created += 1;
+    try {
+      const createdProduct = await productRepo.create(item);
+      products.push(createdProduct);
+      created += 1;
+    } catch (createError) {
+      if (isAlreadyExistsOrPermissionDeniedError(createError) && item.id) {
+        let existingAfterRace: Product | null = null;
+        try {
+          existingAfterRace = await productRepo.getById(item.id);
+        } catch {
+          existingAfterRace = null;
+        }
+        if (existingAfterRace !== null) {
+          products.push(existingAfterRace);
+          skipped += 1;
+          continue;
+        }
+      }
+      throw createError;
+    }
   }
 
   return {
@@ -136,4 +203,72 @@ export async function seedCatalog(productRepo: IProductRepository): Promise<Seed
     skipped,
     products,
   };
+}
+
+export async function seedCatalog(productRepo: IProductRepository): Promise<SeedCatalogResult> {
+  const existingFlight = inFlightSeedMap.get(productRepo);
+  if (existingFlight) {
+    return existingFlight;
+  }
+
+  const promise = runSeedCatalog(productRepo).finally(() => {
+    if (inFlightSeedMap.get(productRepo) === promise) {
+      inFlightSeedMap.delete(productRepo);
+    }
+  });
+  inFlightSeedMap.set(productRepo, promise);
+  return promise;
+}
+
+export interface EnsureAdminColdStartSeedResult {
+  seeded: boolean;
+  products: Product[];
+}
+
+const inFlightAdminSeedMap = new WeakMap<
+  IProductRepository,
+  Promise<EnsureAdminColdStartSeedResult>
+>();
+
+async function runEnsureAdminColdStartSeed(
+  productRepo: IProductRepository,
+): Promise<EnsureAdminColdStartSeedResult> {
+  if (isCatalogIntentionallyEmptied()) {
+    return { seeded: false, products: [] };
+  }
+
+  const existing = await productRepo.listAll();
+  if (existing.length > 0) {
+    clearCatalogIntentionallyEmptied();
+    return { seeded: false, products: existing };
+  }
+
+  const seedResult = await seedCatalog(productRepo);
+  if (seedResult.created > 0) {
+    clearCatalogIntentionallyEmptied();
+    const seededList = await productRepo.listAll();
+    return {
+      seeded: true,
+      products: seededList.length > 0 ? seededList : seedResult.products,
+    };
+  }
+
+  return { seeded: false, products: seedResult.products };
+}
+
+export async function ensureAdminColdStartSeed(
+  productRepo: IProductRepository,
+): Promise<EnsureAdminColdStartSeedResult> {
+  const existingFlight = inFlightAdminSeedMap.get(productRepo);
+  if (existingFlight) {
+    return existingFlight;
+  }
+
+  const promise = runEnsureAdminColdStartSeed(productRepo).finally(() => {
+    if (inFlightAdminSeedMap.get(productRepo) === promise) {
+      inFlightAdminSeedMap.delete(productRepo);
+    }
+  });
+  inFlightAdminSeedMap.set(productRepo, promise);
+  return promise;
 }

@@ -539,11 +539,17 @@ export class LocalProductRepository implements IProductRepository {
   }
 }
 
+const firestoreProductRepoCache = new WeakMap<Firestore, FirestoreProductRepository>();
 const localProductRepoSingleton = new LocalProductRepository();
 
 export function getProductRepository(): IProductRepository {
   if (isFirebaseConfigured() && db !== null) {
-    return new FirestoreProductRepository(db);
+    let cached = firestoreProductRepoCache.get(db);
+    if (!cached) {
+      cached = new FirestoreProductRepository(db);
+      firestoreProductRepoCache.set(db, cached);
+    }
+    return cached;
   }
   return localProductRepoSingleton;
 }

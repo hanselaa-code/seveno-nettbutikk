@@ -23,6 +23,7 @@ import {
   askAiAssistant,
   createProductViaAdmin,
   deleteProductViaAdmin,
+  ensureStarterCatalogReady,
   makeAdminTestProduct,
   makeRunId,
   requireAdminCredsOrSkip,
@@ -33,6 +34,10 @@ import {
 } from '../helpers/testdata';
 
 test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
+  test.beforeAll(async ({ browser }) => {
+    await ensureStarterCatalogReady(browser);
+  });
+
   test.beforeEach(async ({ page }) => {
     await applyAiAppCheckDebugToken(page);
   });

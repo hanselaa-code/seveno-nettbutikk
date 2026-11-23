@@ -31,6 +31,7 @@ import {
   askAiAssistant,
   createProductViaAdmin,
   deleteProductViaAdmin,
+  ensureStarterCatalogReady,
   fillCheckoutCustomer,
   makeAdminTestProduct,
   makeRunId,
@@ -42,6 +43,10 @@ import {
 } from '../helpers/testdata';
 
 test.describe('Tier 3 — Cross-Feature Pairwise Combinations (T3-01 through T3-14)', () => {
+  test.beforeAll(async ({ browser }) => {
+    await ensureStarterCatalogReady(browser);
+  });
+
   test.beforeEach(async ({ page }) => {
     await applyAiAppCheckDebugToken(page);
   });

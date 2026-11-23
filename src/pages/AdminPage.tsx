@@ -9,8 +9,14 @@ import { getContactRepository } from '../repositories/contactRepository';
 import type { IContactRepository } from '../repositories/contactRepository';
 import { getOrderRepository } from '../repositories/orderRepository';
 import type { IOrderRepository } from '../repositories/orderRepository';
-import { getProductRepository } from '../repositories/productRepository';
+import { LocalProductRepository, getProductRepository } from '../repositories/productRepository';
 import type { IProductRepository } from '../repositories/productRepository';
+import {
+  clearCatalogIntentionallyEmptied,
+  ensureAdminColdStartSeed,
+  isCatalogIntentionallyEmptied,
+  markCatalogIntentionallyEmptied,
+} from '../repositories/seedCatalog';
 import { CATEGORIES, DEFAULT_PRODUCT_IMAGE } from '../types/domain';
 import type {
   CategorySlug,
@@ -152,6 +158,8 @@ export function AdminPage({
   const savingRef = useRef(false);
   const authPendingRef = useRef(false);
   const busyProductIdsRef = useRef<Set<string>>(new Set());
+  const refreshCatalogRef = useRef(optionalCatalog?.refreshCatalog);
+  refreshCatalogRef.current = optionalCatalog?.refreshCatalog;
   const tabRefs = useRef<Record<AdminTab, HTMLButtonElement | null>>({
     products: null,
     orders: null,
@@ -214,6 +222,9 @@ export function AdminPage({
         ) {
           return;
         }
+        if (recovered.length > 0 && !(resolvedProductRepo instanceof LocalProductRepository)) {
+          clearCatalogIntentionallyEmptied();
+        }
         hasLoadedProductsRef.current = true;
         setProducts(recovered);
         setProductsError(null);
@@ -256,16 +267,6 @@ export function AdminPage({
       return;
     }
 
-    if (productsVersion === productsMutationVersionRef.current) {
-      if (productsRes.status === 'fulfilled') {
-        hasLoadedProductsRef.current = true;
-        setProducts(productsRes.value);
-      } else {
-        setProductsError('Kunne ikke hente produktlisten fra databasen.');
-      }
-      setLoadingProducts(false);
-    }
-
     if (ordersRes.status === 'fulfilled') {
       setOrders(ordersRes.value);
     } else {
@@ -276,6 +277,53 @@ export function AdminPage({
       setMessages(messagesRes.value);
     } else {
       setMessagesError('Kunne ikke hente henvendelser akkurat nå.');
+    }
+
+    if (productsVersion === productsMutationVersionRef.current) {
+      if (productsRes.status === 'fulfilled') {
+        if (productsRes.value.length > 0) {
+          if (!(resolvedProductRepo instanceof LocalProductRepository)) {
+            clearCatalogIntentionallyEmptied();
+          }
+          hasLoadedProductsRef.current = true;
+          setProducts(productsRes.value);
+          setLoadingProducts(false);
+        } else if (
+          !(resolvedProductRepo instanceof LocalProductRepository) &&
+          !isCatalogIntentionallyEmptied()
+        ) {
+          try {
+            const seedResult = await ensureAdminColdStartSeed(resolvedProductRepo);
+            if (!isMountedRef.current || requestId !== dashboardRequestIdRef.current) {
+              return;
+            }
+            if (productsVersion === productsMutationVersionRef.current) {
+              hasLoadedProductsRef.current = true;
+              setProducts(seedResult.products);
+              setLoadingProducts(false);
+              if (seedResult.seeded) {
+                void refreshCatalogRef.current?.();
+              }
+            }
+          } catch {
+            if (!isMountedRef.current || requestId !== dashboardRequestIdRef.current) {
+              return;
+            }
+            if (productsVersion === productsMutationVersionRef.current) {
+              hasLoadedProductsRef.current = true;
+              setProducts(productsRes.value);
+              setLoadingProducts(false);
+            }
+          }
+        } else {
+          hasLoadedProductsRef.current = true;
+          setProducts(productsRes.value);
+          setLoadingProducts(false);
+        }
+      } else {
+        setProductsError('Kunne ikke hente produktlisten fra databasen.');
+        setLoadingProducts(false);
+      }
     }
   }, [isAuthorizedAdmin, resolvedContactRepo, resolvedOrderRepo, resolvedProductRepo]);
 
@@ -504,6 +552,14 @@ export function AdminPage({
         return;
       }
 
+      if (!(resolvedProductRepo instanceof LocalProductRepository)) {
+        if (refreshedList.length === 0) {
+          markCatalogIntentionallyEmptied();
+        } else {
+          clearCatalogIntentionallyEmptied();
+        }
+      }
+
       await optionalCatalog?.refreshCatalog();
 
       if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
@@ -595,6 +651,14 @@ export function AdminPage({
         return;
       }
 
+      if (!(resolvedProductRepo instanceof LocalProductRepository)) {
+        if (refreshedList.length === 0) {
+          markCatalogIntentionallyEmptied();
+        } else {
+          clearCatalogIntentionallyEmptied();
+        }
+      }
+
       await optionalCatalog?.refreshCatalog();
 
       if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
@@ -651,6 +715,14 @@ export function AdminPage({
 
       if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
         return;
+      }
+
+      if (!(resolvedProductRepo instanceof LocalProductRepository)) {
+        if (refreshedList.length === 0) {
+          markCatalogIntentionallyEmptied();
+        } else {
+          clearCatalogIntentionallyEmptied();
+        }
       }
 
       await optionalCatalog?.refreshCatalog();
