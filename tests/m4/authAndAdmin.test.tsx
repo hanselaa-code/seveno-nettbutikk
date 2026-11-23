@@ -2374,4 +2374,181 @@ describe('Victory Audit Cold-Start Seeding & Non-Reseed Regression Tests', () =>
     expect(screen.getByTestId('catalog-titles')).toHaveTextContent('Nordisk Ullpledd');
     expect(simulated.createSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('calling refreshCatalog() while auth is loading or unauthenticated does NOT prevent admin cold-start seeding after subsequent admin sign-in on /', async () => {
+    const simulated = createSimulatedRemoteProductRepo({ initialAdmin: false });
+    let authStateCallback: ((fbUser: User | null) => void) | null = null;
+    authMocks.onAuthStateChanged.mockImplementation(
+      (_auth: Auth, cb: (fbUser: User | null) => void) => {
+        authStateCallback = cb;
+        return () => {};
+      },
+    );
+    authMocks.getIdTokenResult.mockResolvedValue({ claims: {} });
+    authMocks.getDoc.mockResolvedValue({ exists: () => false });
+
+    const user = userEvent.setup({ delay: null });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <AuthProvider authInstance={{} as Auth} dbInstance={null}>
+          <CatalogProvider productRepository={simulated.repo}>
+            <ColdStartCatalogProbe />
+          </CatalogProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    // 1. Auth is still loading (authStateCallback has not emitted yet): trigger refreshCatalog()
+    expect(authStateCallback).not.toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Oppdater katalog' }));
+
+    // 2. Auth settles as unauthenticated (null) -> falls back cleanly, backend remains empty
+    await act(async () => {
+      authStateCallback?.(null);
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-loading')).toHaveTextContent('false');
+    });
+    expect(screen.getByTestId('catalog-fallback')).toHaveTextContent('true');
+    expect(screen.getByTestId('catalog-count')).toHaveTextContent('3');
+    expect(simulated.size()).toBe(0);
+
+    // 3. Call refreshCatalog() again while unauthenticated -> must NOT poison admin seed ref
+    await user.click(screen.getByRole('button', { name: 'Oppdater katalog' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-loading')).toHaveTextContent('false');
+    });
+    expect(screen.getByTestId('catalog-fallback')).toHaveTextContent('true');
+    expect(simulated.size()).toBe(0);
+
+    // 4. Sign in as admin on / -> CatalogContext must trigger ensureAdminColdStartSeed and load live 3 products
+    simulated.setAdmin(true);
+    await act(async () => {
+      authStateCallback?.(
+        makeFirebaseUser({
+          uid: 'admin-refresh-probe',
+          email: ADMIN_ALLOWLIST_EMAIL,
+          emailVerified: true,
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-fallback')).toHaveTextContent('false');
+      expect(screen.getByTestId('catalog-count')).toHaveTextContent('3');
+    });
+    expect(simulated.size()).toBe(3);
+  });
+
+  it('CatalogContext refreshes active products when another admin/tab concurrently seeds between listActive() and ensureAdminColdStartSeed()', async () => {
+    const starter = getStarterProducts();
+    const store = new Map<string, Product>();
+    let listActiveCalls = 0;
+
+    const concurrentAdminRepo: IProductRepository = {
+      listAll: vi.fn(async () => {
+        // Concurrent caller seeded the 3 starter products right after initial listActive() returned []
+        if (store.size === 0) {
+          for (const item of starter) {
+            store.set(item.id, item);
+          }
+        }
+        return Array.from(store.values());
+      }),
+      listActive: vi.fn(async () => {
+        listActiveCalls += 1;
+        if (listActiveCalls === 1) {
+          return [];
+        }
+        return Array.from(store.values()).filter((p) => p.active);
+      }),
+      listByCategory: vi.fn().mockResolvedValue([]),
+      getById: vi.fn(async (id: string) => store.get(id) ?? null),
+      getBySlug: vi.fn().mockResolvedValue(null),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    };
+
+    const adminUser = {
+      uid: 'admin-race-5c',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <CatalogProvider productRepository={concurrentAdminRepo}>
+            <ColdStartCatalogProbe />
+          </CatalogProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-loading')).toHaveTextContent('false');
+    });
+    expect(screen.getByTestId('catalog-fallback')).toHaveTextContent('false');
+    expect(screen.getByTestId('catalog-count')).toHaveTextContent('3');
+    expect(screen.getByTestId('catalog-titles')).toHaveTextContent('Army sekk');
+    expect(concurrentAdminRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('unauthenticated CatalogContext refreshes active products when an admin concurrently seeds between listActive() and seedCatalog()', async () => {
+    const starter = getStarterProducts();
+    const store = new Map<string, Product>();
+    let listActiveCalls = 0;
+
+    const concurrentUnauthRepo: IProductRepository = {
+      listAll: vi.fn().mockRejectedValue(new Error('permission-denied')),
+      listActive: vi.fn(async () => {
+        listActiveCalls += 1;
+        if (listActiveCalls === 1) {
+          return [];
+        }
+        return Array.from(store.values()).filter((p) => p.active);
+      }),
+      listByCategory: vi.fn().mockResolvedValue([]),
+      getById: vi.fn(async (id: string) => {
+        // Concurrent admin finishes seeding right before seedCatalog checks/recovers
+        if (store.size === 0) {
+          for (const item of starter) {
+            store.set(item.id, item);
+          }
+        }
+        return store.get(id) ?? null;
+      }),
+      getBySlug: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockRejectedValue(
+        Object.assign(new Error('Missing or insufficient permissions.'), {
+          code: 'permission-denied',
+        }),
+      ),
+      update: vi.fn(),
+      delete: vi.fn(),
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <AuthProvider initialUser={null} initialIsAdmin={false}>
+          <CatalogProvider productRepository={concurrentUnauthRepo}>
+            <ColdStartCatalogProbe />
+          </CatalogProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-loading')).toHaveTextContent('false');
+    });
+    expect(screen.getByTestId('catalog-fallback')).toHaveTextContent('false');
+    expect(screen.getByTestId('catalog-count')).toHaveTextContent('3');
+    expect(screen.getByTestId('catalog-titles')).toHaveTextContent('Army sekk');
+  });
 });

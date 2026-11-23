@@ -141,7 +141,7 @@ export function CatalogProvider({ children, productRepository }: CatalogProvider
                 if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
                 hasConfirmedCatalogRef.current = true;
                 unauthSeedFailedRef.current = false;
-                if (seedResult.seeded) {
+                if (seedResult.seeded || seedResult.products.some((p) => p.active)) {
                   active = await repo.listActive();
                   if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
                 }
@@ -160,7 +160,7 @@ export function CatalogProvider({ children, productRepository }: CatalogProvider
               if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
               hasConfirmedCatalogRef.current = true;
               unauthSeedFailedRef.current = false;
-              if (seedResult.created > 0) {
+              if (seedResult.created > 0 || seedResult.products.some((p) => p.active)) {
                 active = await repo.listActive();
                 if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
               }
@@ -208,8 +208,12 @@ export function CatalogProvider({ children, productRepository }: CatalogProvider
   );
 
   const refreshCatalog = useCallback(async () => {
-    hasAttemptedUnauthSeedRef.current = true;
-    hasAttemptedAdminSeedRef.current = true;
+    if (!authLoadingRef.current) {
+      hasAttemptedUnauthSeedRef.current = true;
+    }
+    if (isAuthorizedAdminRef.current) {
+      hasAttemptedAdminSeedRef.current = true;
+    }
     await loadCatalog({ allowInitialSeed: false });
   }, [loadCatalog]);
 
