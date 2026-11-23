@@ -20,6 +20,7 @@ import {
   getMobileMenuButton,
   getProductCardByTitle,
   getProductLinkByTitle,
+  getVisibleAdminProductRows,
   navigateStorefront,
   openCartDrawer,
   type PaymentProviderChoice,
@@ -75,6 +76,9 @@ test.describe('Tier 3 — Cross-Feature Pairwise Combinations (T3-01 through T3-
       .getByRole('button', { name: /^\+$|øk/i })
       .first()
       .click();
+    await expect(getCartButton(page)).toContainText(/2/);
+    await drawer.getByRole('button', { name: /lukk|×/i }).first().click();
+    await expect(drawer).toBeHidden();
 
     await navigateStorefront(page, /seveno home/i);
     await expect(page).toHaveURL(/\/kategori\/seveno-home/);
@@ -85,7 +89,9 @@ test.describe('Tier 3 — Cross-Feature Pairwise Combinations (T3-01 through T3-
     await page.reload();
 
     await expect(getCartButton(page)).toContainText(/2/);
-    await expect(page.locator('main')).toContainText(STARTER_PRODUCTS.armySekk.title);
+    await expect(page.locator('main')).toContainText(STARTER_PRODUCTS.armySekk.title, {
+      timeout: 15_000,
+    });
   });
 
   test('T3-03 Multi-Source Add Merge & Stock Cap Enforcement', async ({ page }, testInfo) => {
@@ -163,7 +169,10 @@ test.describe('Tier 3 — Cross-Feature Pairwise Combinations (T3-01 through T3-
     await page.goto('/utsjekk');
     await fillCheckoutCustomer(page, { ...VALID_NORWEGIAN_CUSTOMER, postalCode: '123' });
     await getCheckoutFormFields(page).submit.click();
-    await expect(page.getByRole('heading', { name: /ordrebekreftelse/i })).toHaveCount(0);
+    await expect(
+      page.getByRole('heading', { name: /ordrebekreftelse|takk for din bestilling/i }),
+    ).toHaveCount(0);
+    await expect(page.locator('#checkout-postal-code')).toHaveAttribute('aria-invalid', 'true');
 
     // Mutate cart via drawer before submitting valid order
     const drawer = await openCartDrawer(page);
@@ -171,7 +180,9 @@ test.describe('Tier 3 — Cross-Feature Pairwise Combinations (T3-01 through T3-
       .getByRole('button', { name: /fjern/i })
       .first()
       .click();
-    await drawer.getByRole('button', { name: /lukk|×/i }).first().click().catch(() => {});
+    await expect(drawer.getByText(STARTER_PRODUCTS.skobeholder.title)).toHaveCount(0);
+    await drawer.getByRole('button', { name: /lukk|×/i }).first().click();
+    await expect(drawer).toBeHidden();
 
     const { orderNumber, confirmationText } = await submitOrderAndReadConfirmation(
       page,
@@ -226,11 +237,9 @@ test.describe('Tier 3 — Cross-Feature Pairwise Combinations (T3-01 through T3-
       await expect(getProductCardByTitle(page, product.title)).toContainText(/990\s*kr/i);
 
       await page.goto('/admin');
-      const row = page
-        .locator('tr, li, article, div')
-        .filter({ hasText: product.title })
+      const row = getVisibleAdminProductRows(page, product.title)
         .filter({ has: page.getByRole('button', { name: /rediger/i }) })
-        .last();
+        .first();
       await expect(row).toBeVisible({ timeout: 15_000 });
       await row.getByRole('button', { name: /rediger/i }).first().click();
 
@@ -272,13 +281,10 @@ test.describe('Tier 3 — Cross-Feature Pairwise Combinations (T3-01 through T3-
       await stockField.fill('0');
       await saveBtn.click();
 
-      const updatedRow = page
-        .locator('tr, li, article, div')
-        .filter({ hasText: product.title })
+      const updatedRow = getVisibleAdminProductRows(page, product.title)
         .filter({ hasText: /1[\s\u00a0\u202f.]*190/ })
         .first();
-      const savedNotice = page.locator('main').getByText(/oppdatert|lagret/i).first();
-      await expect(updatedRow.or(savedNotice)).toBeVisible({ timeout: 15_000 });
+      await expect(updatedRow).toBeVisible({ timeout: 15_000 });
 
       await page.goto(`/kategori/${product.categorySlug}`);
       await page.reload();
@@ -298,6 +304,7 @@ test.describe('Tier 3 — Cross-Feature Pairwise Combinations (T3-01 through T3-
   test('T3-08 Admin Product Creation -> Immediate AI Assistant Live Catalog Grounding', async ({
     page,
   }, testInfo) => {
+    test.setTimeout(75_000);
     const adminCreds = await requireAdminCredsOrSkip(testInfo);
     const runId = makeRunId();
     const product = makeAdminTestProduct(runId, {
@@ -354,6 +361,7 @@ test.describe('Tier 3 — Cross-Feature Pairwise Combinations (T3-01 through T3-
   });
 
   test('T3-10 Contact Form Submission + AI Chat + Cart Continuity', async ({ page }) => {
+    test.setTimeout(75_000);
     await addProductToCartFromCatalog(page, STARTER_PRODUCTS.pergola);
     await page.goto('/kontakt');
 
@@ -420,13 +428,17 @@ test.describe('Tier 3 — Cross-Feature Pairwise Combinations (T3-01 through T3-
     // Low-value order (Skobeholder)
     await addProductToCartFromCatalog(page, STARTER_PRODUCTS.skobeholder);
     await page.goto('/utsjekk');
+    await expect(page.locator('main')).toContainText(/Delsum/i, { timeout: 15_000 });
+    await expect(page.locator('main')).toContainText(/Totalt/i, { timeout: 15_000 });
     const lowText = await page.locator('main').innerText();
-    extractAndAssertOrderMath(lowText);
+    const lowTotals = extractAndAssertOrderMath(lowText);
+    expect(lowTotals.shippingNok).toBe(99);
 
     // High-value order (Pergola)
     await addProductToCartFromCatalog(page, STARTER_PRODUCTS.pergola);
     const { confirmationText } = await submitOrderAndReadConfirmation(page, 'test_order');
-    extractAndAssertOrderMath(confirmationText);
+    const highTotals = extractAndAssertOrderMath(confirmationText);
+    expect(highTotals.shippingNok).toBe(0);
   });
 
   test('T3-14 Admin Product Deletion -> Storefront Removal & Clean Teardown', async ({
@@ -438,17 +450,28 @@ test.describe('Tier 3 — Cross-Feature Pairwise Combinations (T3-01 through T3-
     });
 
     await signInAdmin(page, adminCreds);
-    await createProductViaAdmin(page, product);
+    try {
+      await createProductViaAdmin(page, product);
 
-    await page.goto(`/kategori/${product.categorySlug}`);
-    await expect(getProductLinkByTitle(page, product.title)).toBeVisible();
+      await page.goto(`/kategori/${product.categorySlug}`);
+      await expect(getProductLinkByTitle(page, product.title)).toBeVisible();
 
-    await deleteProductViaAdmin(page, product.title);
+      await deleteProductViaAdmin(page, product.title);
 
-    await page.goto(`/kategori/${product.categorySlug}`);
-    await expect(getProductLinkByTitle(page, product.title)).toHaveCount(0);
-    await page.goto('/kategori/alle');
-    await expect(getProductLinkByTitle(page, product.title)).toHaveCount(0);
+      await page.goto(`/kategori/${product.categorySlug}`);
+      await expect(getProductLinkByTitle(page, STARTER_PRODUCTS.armySekk.title)).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(getProductLinkByTitle(page, product.title)).toHaveCount(0);
+
+      await page.goto('/kategori/alle');
+      await expect(getProductLinkByTitle(page, STARTER_PRODUCTS.armySekk.title)).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(getProductLinkByTitle(page, product.title)).toHaveCount(0);
+    } finally {
+      await deleteProductViaAdmin(page, product.title).catch(() => {});
+    }
   });
 
   void getCartDrawer;

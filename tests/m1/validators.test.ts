@@ -150,16 +150,25 @@ describe('validators (M1)', () => {
       expect(invalid.errors.paymentProvider).toBeDefined();
     });
 
-    it('rejects >50 order items or quantity >100', () => {
+    it('accepts up to 4 order items (matching Firestore rules cap) and rejects >4 order items or quantity >100', () => {
+      const maxValid = validateOrderInput({
+        ownerUid: 'u1',
+        customer: { name: 'Ola Nordmann', email: 'ola@example.no', phone: '91234567' },
+        shippingAddress: { street: 'Storgata 1', postalCode: '0150', city: 'Oslo' },
+        items: Array.from({ length: 4 }, (_, i) => ({ productId: `p-${i}`, quantity: 1 })),
+        paymentProvider: 'klarna',
+      });
+      expect(maxValid.valid).toBe(true);
+
       const tooMany = validateOrderInput({
         ownerUid: 'u1',
         customer: { name: 'Ola Nordmann', email: 'ola@example.no', phone: '91234567' },
         shippingAddress: { street: 'Storgata 1', postalCode: '0150', city: 'Oslo' },
-        items: Array.from({ length: 51 }, (_, i) => ({ productId: `p-${i}`, quantity: 1 })),
+        items: Array.from({ length: 5 }, (_, i) => ({ productId: `p-${i}`, quantity: 1 })),
         paymentProvider: 'klarna',
       });
       expect(tooMany.valid).toBe(false);
-      expect(tooMany.errors.items).toBeDefined();
+      expect(tooMany.errors.items).toContain('4');
 
       const badQty = validateOrderInput({
         ownerUid: 'u1',
@@ -230,6 +239,29 @@ describe('validators (M1)', () => {
       expect(res.valid).toBe(true);
       expect(res.value?.customer.phone).toBe('912 34 567');
       expect(res.value?.customer.phone).not.toContain('\u00A0');
+    });
+
+    it('rejects sub-1-NOK priceNok and paid_test on non-test_order providers', () => {
+      const subOneNok = validateProductInput({
+        title: 'Billig vare',
+        categorySlug: 'seveno-living',
+        description: 'Beskrivelse av vare under 1 krone.',
+        priceNok: 0.001,
+        stock: 5,
+      });
+      expect(subOneNok.valid).toBe(false);
+      expect(subOneNok.errors.priceNok).toBeDefined();
+
+      const spoofedPaidTest = validateOrderInput({
+        ownerUid: 'u1',
+        customer: { name: 'Ola Nordmann', email: 'ola@example.no', phone: '91234567' },
+        shippingAddress: { street: 'Storgata 1', postalCode: '0150', city: 'Oslo' },
+        items: [{ productId: 'army-sekk', quantity: 1 }],
+        paymentProvider: 'vipps',
+        paymentStatus: 'paid_test',
+      });
+      expect(spoofedPaidTest.valid).toBe(false);
+      expect(spoofedPaidTest.errors.paymentStatus).toBeDefined();
     });
   });
 

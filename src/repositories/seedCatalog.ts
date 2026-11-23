@@ -90,13 +90,36 @@ export function getStarterProducts(timestamp: string = new Date().toISOString())
   });
 }
 
+function isPermissionDeniedError(error: unknown): boolean {
+  const code =
+    error !== null && typeof error === 'object' && 'code' in error
+      ? String((error as { code: unknown }).code)
+      : '';
+  return (
+    code === 'permission-denied' ||
+    code.endsWith('/permission-denied') ||
+    (error instanceof Error && /permission-denied/i.test(error.message))
+  );
+}
+
 export async function seedCatalog(productRepo: IProductRepository): Promise<SeedCatalogResult> {
   let created = 0;
   let skipped = 0;
   const products: Product[] = [];
 
   for (const item of STARTER_PRODUCTS) {
-    const existing = item.id ? await productRepo.getById(item.id) : null;
+    let existing: Product | null = null;
+    try {
+      existing = item.id ? await productRepo.getById(item.id) : null;
+    } catch (error) {
+      if (isPermissionDeniedError(error)) {
+        // Non-admin read of an existing deactivated starter product is denied by Firestore rules.
+        skipped += 1;
+        continue;
+      }
+      throw error;
+    }
+
     if (existing) {
       products.push(existing);
       skipped += 1;

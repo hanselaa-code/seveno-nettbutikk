@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/App';
+import { ProductCard } from '../../src/components/storefront/ProductCard';
 import { CartDrawer } from '../../src/components/cart/CartDrawer';
 import { PaymentSelector } from '../../src/components/checkout/PaymentSelector';
 import { Header } from '../../src/components/layout/Header';
@@ -19,7 +20,8 @@ import { FirestoreProductRepository } from '../../src/repositories/productReposi
 import type { IProductRepository } from '../../src/repositories/productRepository';
 import { getStarterProducts } from '../../src/repositories/seedCatalog';
 import { CheckoutPage } from '../../src/pages/CheckoutPage';
-import { createDefaultPaymentRegistry } from '../../src/services/payments/registry';
+import { PaymentProviderRegistry, createDefaultPaymentRegistry } from '../../src/services/payments/registry';
+import type { IPaymentProvider } from '../../src/services/payments/types';
 import { DEFAULT_PRODUCT_IMAGE } from '../../src/types/domain';
 import type { PaymentProviderId, Product } from '../../src/types/domain';
 
@@ -291,6 +293,46 @@ describe('M3 Cart, Drawer, Checkout & Order Repository', () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
+  it('rejects 5-digit postal code like "01500" without truncating or submitting an order', async () => {
+    const user = userEvent.setup();
+    const orderRepo = new LocalOrderRepository('test_orders_postal_5_digits');
+    const createSpy = vi.spyOn(orderRepo, 'create');
+    const registry = createDefaultPaymentRegistry();
+    const starter = getStarterProducts();
+
+    render(
+      <MemoryRouter>
+        <CartProvider
+          products={starter}
+          initialItems={[{ productId: 'army-sekk', quantity: 1 }]}
+        >
+          <CheckoutPage
+            orderRepo={orderRepo}
+            paymentRegistry={registry}
+            resolveOwnerUid={async () => 'guest-postal-check'}
+          />
+        </CartProvider>
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText('Fullt navn'), 'Ola Nordmann');
+    await user.type(screen.getByLabelText('E-postadresse'), 'ola@eksempel.no');
+    await user.type(screen.getByLabelText('Telefon'), '91234567');
+    await user.type(screen.getByLabelText('Gateadresse'), 'Storgata 10');
+    await user.type(screen.getByLabelText('Postnummer (4 siffer)'), '01500');
+    await user.type(screen.getByLabelText('Poststed'), 'Oslo');
+
+    const postalInput = screen.getByLabelText('Postnummer (4 siffer)') as HTMLInputElement;
+    expect(postalInput.value).toBe('01500');
+
+    await user.click(screen.getByRole('button', { name: 'Fullfør testbestilling' }));
+
+    expect(postalInput).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('Postnummer må bestå av nøyaktig 4 siffer.')).toBeInTheDocument();
+    expect(screen.queryByText('Ordrebekreftelse')).not.toBeInTheDocument();
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   it('displays Vipps, Klarna, and Testbestilling in PaymentSelector with sandbox readiness badges', async () => {
     const user = userEvent.setup();
     const registry = createDefaultPaymentRegistry();
@@ -361,7 +403,13 @@ describe('M3 Cart, Drawer, Checkout & Order Repository', () => {
       expect(screen.getByText('Ordrebekreftelse')).toBeInTheDocument();
       expect(screen.getByTestId('order-number').textContent).toMatch(/^SEV-\d{4}-[A-Z0-9]{8}$/);
       expect(screen.getByText('Kari Nordmann')).toBeInTheDocument();
-      expect(screen.getByText('Betalt (testordre)')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          providerId === 'test_order'
+            ? 'Betalt (testordre)'
+            : 'Avventer betalingsleverandør (Testmodus)',
+        ),
+      ).toBeInTheDocument();
       expect(screen.getByRole('link', { name: 'Fortsett å handle' })).toHaveAttribute(
         'href',
         '/kategori/alle',
@@ -581,5 +629,214 @@ describe('M3 Cart, Drawer, Checkout & Order Repository', () => {
     });
     await user.click(screen.getByRole('button', { name: 'Legg i handlekurv' }));
     expect(screen.getByText('Lagt i handlekurv')).toBeInTheDocument();
+  });
+
+  it('shows Norwegian loading status on CheckoutPage instead of "Produkt (id) · 0 kr" while remote catalog is still loading', async () => {
+    let resolveListActive!: (products: Product[]) => void;
+    const pendingListActive = new Promise<Product[]>((resolve) => {
+      resolveListActive = resolve;
+    });
+    const asyncProductRepo: IProductRepository = {
+      listAll: async () => [],
+      listActive: () => pendingListActive,
+      listByCategory: async () => [],
+      getById: async () => null,
+      getBySlug: async () => null,
+      create: async () => {
+        throw new Error('not implemented');
+      },
+      update: async () => {
+        throw new Error('not implemented');
+      },
+      delete: async () => undefined,
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/utsjekk']}>
+        <CatalogProvider productRepository={asyncProductRepo}>
+          <CartProvider initialItems={[{ productId: 'army-sekk', quantity: 1 }]}>
+            <CheckoutPage />
+          </CartProvider>
+        </CatalogProvider>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Laster ordresammendrag ...')).toBeInTheDocument();
+    expect(screen.queryByText(/Produkt \(army-sekk\)/i)).not.toBeInTheDocument();
+
+    resolveListActive(getStarterProducts());
+    expect(await screen.findByText('Army sekk')).toBeInTheDocument();
+    expect(screen.queryByText('Laster ordresammendrag ...')).not.toBeInTheDocument();
+  });
+
+  it('rejects over-stock and deleted localStorage cart items BEFORE calling createSession/authorizePayment in sandbox and live modes, and supports adjusting to max stock', async () => {
+    const user = userEvent.setup();
+    const starter = getStarterProducts();
+    const createSessionMock = vi.fn();
+    const authorizeMock = vi.fn();
+
+    const makeSpyRegistry = (mode: 'sandbox' | 'live') => {
+      const reg = new PaymentProviderRegistry();
+      const spyProvider: IPaymentProvider = {
+        id: 'klarna',
+        displayName: 'Klarna',
+        description: 'Spy Klarna',
+        mode,
+        isConfigured: () => true,
+        createSession: createSessionMock,
+        authorizePayment: authorizeMock,
+        getStatus: vi.fn(),
+      };
+      reg.register(spyProvider);
+      return reg;
+    };
+
+    // Case 1: Over-stock localStorage item in sandbox mode
+    window.localStorage.setItem(
+      'tier5_overstock_cart',
+      JSON.stringify([{ productId: 'akryl-gjennomsiktig-skobeholder', quantity: 99 }]),
+    );
+
+    const orderRepo = new LocalOrderRepository('tier5_overstock_orders');
+    const createOrderSpy = vi.spyOn(orderRepo, 'create');
+
+    const { unmount } = render(
+      <MemoryRouter>
+        <CartProvider products={starter} storageKey="tier5_overstock_cart">
+          <CartDrawer />
+          <CheckoutPage
+            orderRepo={orderRepo}
+            paymentRegistry={makeSpyRegistry('sandbox')}
+            resolveOwnerUid={async () => 'guest-overstock'}
+          />
+        </CartProvider>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Bare 42 stk på lager')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Fullt navn'), 'Ola Nordmann');
+    await user.type(screen.getByLabelText('E-postadresse'), 'ola@eksempel.no');
+    await user.type(screen.getByLabelText('Telefon'), '91234567');
+    await user.type(screen.getByLabelText('Gateadresse'), 'Storgata 10');
+    await user.type(screen.getByLabelText('Postnummer (4 siffer)'), '0155');
+    await user.type(screen.getByLabelText('Poststed'), 'Oslo');
+
+    await user.click(screen.getByRole('button', { name: 'Fullfør testbestilling' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/bare 42 stk på lager/i);
+    expect(createSessionMock).not.toHaveBeenCalled();
+    expect(authorizeMock).not.toHaveBeenCalled();
+    expect(createOrderSpy).not.toHaveBeenCalled();
+
+    // Adjust to max (42) works and allows clean checkout
+    await user.click(screen.getByRole('button', { name: 'Juster til maks (42)' }));
+    expect(screen.queryByText('Bare 42 stk på lager')).not.toBeInTheDocument();
+    unmount();
+
+    // Case 2: Deleted product in sandbox mode does NOT fall back to unitPriceNok: 1 or invoke payment
+    window.localStorage.setItem(
+      'tier5_deleted_cart',
+      JSON.stringify([
+        { productId: 'deleted-prod-xyz', quantity: 1 },
+        { productId: 'army-sekk', quantity: -5 },
+      ]),
+    );
+    createSessionMock.mockClear();
+    authorizeMock.mockClear();
+
+    const { unmount: unmountCase2 } = render(
+      <MemoryRouter>
+        <CartProvider products={starter} storageKey="tier5_deleted_cart">
+          <CheckoutPage
+            orderRepo={orderRepo}
+            paymentRegistry={makeSpyRegistry('sandbox')}
+            resolveOwnerUid={async () => 'guest-deleted'}
+          />
+        </CartProvider>
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText('Fullt navn'), 'Kari Nordmann');
+    await user.type(screen.getByLabelText('E-postadresse'), 'kari@eksempel.no');
+    await user.type(screen.getByLabelText('Telefon'), '91234567');
+    await user.type(screen.getByLabelText('Gateadresse'), 'Storgata 10');
+    await user.type(screen.getByLabelText('Postnummer (4 siffer)'), '0155');
+    await user.type(screen.getByLabelText('Poststed'), 'Oslo');
+
+    await user.click(screen.getByRole('button', { name: 'Fullfør testbestilling' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/ikke lenger tilgjengelig/i);
+    expect(createSessionMock).not.toHaveBeenCalled();
+    expect(authorizeMock).not.toHaveBeenCalled();
+    expect(createOrderSpy).not.toHaveBeenCalled();
+    unmountCase2();
+
+    // Case 3: Over-stock item in live mode ALSO rejects before calling createSession/authorizePayment
+    window.localStorage.setItem(
+      'tier5_live_overstock_cart',
+      JSON.stringify([{ productId: 'akryl-gjennomsiktig-skobeholder', quantity: 99 }]),
+    );
+    createSessionMock.mockClear();
+    authorizeMock.mockClear();
+    createOrderSpy.mockClear();
+
+    render(
+      <MemoryRouter>
+        <CartProvider products={starter} storageKey="tier5_live_overstock_cart">
+          <CheckoutPage
+            orderRepo={orderRepo}
+            paymentRegistry={makeSpyRegistry('live')}
+            resolveOwnerUid={async () => 'guest-live-overstock'}
+          />
+        </CartProvider>
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText('Fullt navn'), 'Live Kunde');
+    await user.type(screen.getByLabelText('E-postadresse'), 'live@eksempel.no');
+    await user.type(screen.getByLabelText('Telefon'), '91234567');
+    await user.type(screen.getByLabelText('Gateadresse'), 'Storgata 10');
+    await user.type(screen.getByLabelText('Postnummer (4 siffer)'), '0155');
+    await user.type(screen.getByLabelText('Poststed'), 'Oslo');
+
+    await user.click(screen.getByRole('button', { name: 'Fullfør testbestilling' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/bare 42 stk på lager/i);
+    expect(createSessionMock).not.toHaveBeenCalled();
+    expect(authorizeMock).not.toHaveBeenCalled();
+    expect(createOrderSpy).not.toHaveBeenCalled();
+  });
+
+  it('enforces VALIDATION_LIMITS.orderItemsMax (4) across CartContext, ProductCard, and CartDrawer', async () => {
+    const user = userEvent.setup();
+    const starter = getStarterProducts();
+    const extra4 = { ...starter[0], id: 'extra-4', slug: 'extra-4', title: 'Ekstra Produkt 4' };
+    const extra5 = { ...starter[0], id: 'extra-5', slug: 'extra-5', title: 'Ekstra Produkt 5' };
+    const fiveProducts = [...starter, extra4, extra5];
+
+    // localStorage with 5 distinct items is clamped to orderItemsMax (4)
+    window.localStorage.setItem(
+      'tier5_max_items_cart',
+      JSON.stringify(fiveProducts.map((p) => ({ productId: p.id, quantity: 1 }))),
+    );
+
+    render(
+      <MemoryRouter>
+        <CartProvider products={fiveProducts} storageKey="tier5_max_items_cart">
+          <CartDrawer />
+          <ProductCard product={extra5} />
+        </CartProvider>
+      </MemoryRouter>,
+    );
+
+    // 4 items fit cleanly, 5th item was clamped out
+    expect(JSON.parse(window.localStorage.getItem('tier5_max_items_cart')!)).toHaveLength(4);
+
+    // Clicking "Legg i handlekurv" on a 5th distinct product shows clear Norwegian error and does not add
+    await user.click(screen.getByRole('button', { name: 'Legg i handlekurv' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/maks 4 ulike produkter per bestilling/i);
+    expect(screen.queryByText('Lagt i handlekurv')).not.toBeInTheDocument();
   });
 });

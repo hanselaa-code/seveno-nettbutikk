@@ -19,6 +19,7 @@ export interface ResolvedCartItem {
   quantity: number;
   product: Product | null;
   available: boolean;
+  exceedsStock: boolean;
   unitPriceNok: number;
   lineTotalNok: number;
 }
@@ -31,6 +32,8 @@ export interface CartContextValue {
   shippingNok: number;
   mvaNok: number;
   totalNok: number;
+  maxDistinctItems: number;
+  isAtMaxDistinctItems: boolean;
   isDrawerOpen: boolean;
   openDrawer: () => void;
   closeDrawer: () => void;
@@ -65,11 +68,11 @@ function sanitizeCartItems(raw: unknown): CartItem[] {
       continue;
     }
 
-    if (typeof record.quantity !== 'number' || !Number.isFinite(record.quantity)) {
+    if (typeof record.quantity !== 'number' || !Number.isInteger(record.quantity)) {
       continue;
     }
 
-    const qty = Math.floor(record.quantity);
+    const qty = record.quantity;
     if (qty < 1) {
       continue;
     }
@@ -245,6 +248,9 @@ export function CartProvider({
       items.map((item) => {
         const product = productById.get(item.productId) ?? null;
         const available = Boolean(product && product.active && product.stock > 0);
+        const exceedsStock = Boolean(
+          product && product.active && product.stock > 0 && item.quantity > product.stock,
+        );
         const unitPriceNok = product ? product.priceNok : 0;
         const lineTotalNok = unitPriceNok * item.quantity;
 
@@ -253,6 +259,7 @@ export function CartProvider({
           quantity: item.quantity,
           product,
           available,
+          exceedsStock,
           unitPriceNok,
           lineTotalNok,
         };
@@ -286,6 +293,8 @@ export function CartProvider({
       shippingNok,
       mvaNok,
       totalNok,
+      maxDistinctItems: VALIDATION_LIMITS.orderItemsMax,
+      isAtMaxDistinctItems: items.length >= VALIDATION_LIMITS.orderItemsMax,
       isDrawerOpen,
       openDrawer,
       closeDrawer,

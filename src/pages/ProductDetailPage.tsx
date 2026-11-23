@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useOptionalCart } from '../context/CartContext';
 import { useCatalog } from '../context/CatalogContext';
 import { FREE_SHIPPING_THRESHOLD_NOK, formatNok } from '../lib/format';
+import { VALIDATION_LIMITS, isValidImageUrl } from '../lib/validators';
 import { DEFAULT_PRODUCT_IMAGE } from '../types/domain';
 import type { Product } from '../types/domain';
 
@@ -20,7 +21,7 @@ export function ProductDetailPage() {
 
   const [quantity, setQuantity] = useState(1);
   const [imgError, setImgError] = useState(false);
-  const [addedFeedback, setAddedFeedback] = useState(false);
+  const [cartFeedback, setCartFeedback] = useState<'added' | 'at-cap' | 'max-items' | null>(null);
 
   const matchesResolvedKey = Boolean(productId && resolvedEntry?.key === productId);
   const product = contextProduct ?? (matchesResolvedKey ? (resolvedEntry?.product ?? null) : null);
@@ -30,7 +31,7 @@ export function ProductDetailPage() {
 
   useEffect(() => {
     setQuantity(1);
-    setAddedFeedback(false);
+    setCartFeedback(null);
   }, [productId, product?.id]);
 
   useEffect(() => {
@@ -105,9 +106,13 @@ export function ProductDetailPage() {
     );
   }
 
-  const resolvedSrc = imgError || !product.imageUrl ? DEFAULT_PRODUCT_IMAGE : product.imageUrl;
+  const safeImageUrl =
+    product.imageUrl && isValidImageUrl(product.imageUrl) ? product.imageUrl.trim() : '';
+  const resolvedSrc = imgError || !safeImageUrl ? DEFAULT_PRODUCT_IMAGE : safeImageUrl;
   const inStock = product.stock > 0;
   const qualifiesFreeShipping = product.priceNok >= FREE_SHIPPING_THRESHOLD_NOK;
+  const existingCartQty =
+    optionalCart?.items.find((item) => item.productId === product.id)?.quantity ?? 0;
 
   const handleDecrement = () => {
     setQuantity((prev) => Math.max(1, prev - 1));
@@ -121,8 +126,20 @@ export function ProductDetailPage() {
     if (!inStock) {
       return;
     }
+    if (
+      existingCartQty === 0 &&
+      optionalCart &&
+      optionalCart.items.length >= VALIDATION_LIMITS.orderItemsMax
+    ) {
+      setCartFeedback('max-items');
+      return;
+    }
+    if (existingCartQty >= product.stock) {
+      setCartFeedback('at-cap');
+      return;
+    }
     optionalCart?.addItem(product.id, quantity);
-    setAddedFeedback(true);
+    setCartFeedback('added');
   };
 
   return (
@@ -136,11 +153,13 @@ export function ProductDetailPage() {
           {product.categoryName}
         </Link>
         <span aria-hidden="true">/</span>
-        <span className="font-medium text-espresso">{product.title}</span>
+        <span className="min-w-0 wrap-anywhere font-medium text-espresso">
+          {product.title}
+        </span>
       </nav>
 
       <div className="grid gap-10 lg:grid-cols-12">
-        <div className="lg:col-span-6">
+        <div className="min-w-0 lg:col-span-6">
           <div className="aspect-[4/3] overflow-hidden rounded-xl border border-sand bg-ivory shadow-nordic">
             <img
               src={resolvedSrc}
@@ -155,11 +174,11 @@ export function ProductDetailPage() {
           </div>
         </div>
 
-        <div className="flex flex-col lg:col-span-6">
+        <div className="flex min-w-0 flex-col lg:col-span-6">
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-bronze">
             {product.categoryName}
           </p>
-          <h1 className="mt-2 font-serif text-3xl font-semibold text-espresso sm:text-4xl">
+          <h1 className="mt-2 wrap-anywhere font-serif text-3xl font-semibold text-espresso sm:text-4xl">
             {product.title}
           </h1>
 
@@ -189,7 +208,9 @@ export function ProductDetailPage() {
             )}
           </div>
 
-          <p className="mt-6 text-base leading-relaxed text-charcoal">{product.description}</p>
+          <p className="mt-6 wrap-anywhere text-base leading-relaxed text-charcoal">
+            {product.description}
+          </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-4">
             <div className="inline-flex items-center rounded-md border border-sand bg-ivory">
@@ -230,14 +251,26 @@ export function ProductDetailPage() {
             </button>
           </div>
 
-          {addedFeedback && (
+          {cartFeedback && (
             <div
-              role="status"
+              role={cartFeedback === 'max-items' ? 'alert' : 'status'}
               aria-live="polite"
-              className="mt-4 inline-flex items-center gap-2 rounded-md border border-success/30 bg-ivory px-4 py-2.5 text-sm font-medium text-success"
+              className={`mt-4 inline-flex items-center gap-2 rounded-md border bg-ivory px-4 py-2.5 text-sm font-medium ${
+                cartFeedback === 'max-items'
+                  ? 'border-error/30 text-error'
+                  : cartFeedback === 'at-cap'
+                    ? 'border-warning/30 text-warning'
+                    : 'border-success/30 text-success'
+              }`}
             >
               <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>Lagt i handlekurv</span>
+              <span>
+                {cartFeedback === 'max-items'
+                  ? `Maks ${VALIDATION_LIMITS.orderItemsMax} ulike produkter per bestilling.`
+                  : cartFeedback === 'at-cap'
+                    ? 'Maks antall allerede i handlekurv'
+                    : 'Lagt i handlekurv'}
+              </span>
             </div>
           )}
 
@@ -246,12 +279,12 @@ export function ProductDetailPage() {
               <h2 className="font-serif text-xl font-semibold text-espresso">Spesifikasjoner</h2>
               <ul className="mt-3 space-y-2 text-sm text-charcoal">
                 {product.specs.map((spec, index) => (
-                  <li key={`${index}-${spec}`} className="flex items-start gap-2.5">
+                  <li key={`${index}-${spec}`} className="flex min-w-0 items-start gap-2.5">
                     <span
                       className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-bronze"
                       aria-hidden="true"
                     />
-                    <span>{spec}</span>
+                    <span className="min-w-0 wrap-anywhere">{spec}</span>
                   </li>
                 ))}
               </ul>

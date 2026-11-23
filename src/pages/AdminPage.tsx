@@ -1,10 +1,10 @@
 import { LogOut, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { FormEvent, KeyboardEvent } from 'react';
 import { useOptionalAuth } from '../context/AuthContext';
 import { useOptionalCatalog } from '../context/CatalogContext';
 import { formatNok, slugify } from '../lib/format';
-import { isValidEmail, validateProductInput, ValidationError } from '../lib/validators';
+import { isValidEmail, isValidImageUrl, validateProductInput, ValidationError } from '../lib/validators';
 import { getContactRepository } from '../repositories/contactRepository';
 import type { IContactRepository } from '../repositories/contactRepository';
 import { getOrderRepository } from '../repositories/orderRepository';
@@ -64,7 +64,8 @@ function ProductThumbnail({ src, alt }: { src: string; alt: string }) {
     setHasError(false);
   }, [src]);
 
-  const resolvedSrc = hasError || !src.trim() ? DEFAULT_PRODUCT_IMAGE : src;
+  const safeSrc = src.trim() && isValidImageUrl(src) ? src.trim() : '';
+  const resolvedSrc = hasError || !safeSrc ? DEFAULT_PRODUCT_IMAGE : safeSrc;
 
   return (
     <img
@@ -146,11 +147,22 @@ export function AdminPage({
   const [formError, setFormError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [savingProduct, setSavingProduct] = useState(false);
-  const [busyProductId, setBusyProductId] = useState<string | null>(null);
+  const [busyProductIds, setBusyProductIds] = useState<Set<string>>(() => new Set());
 
   const savingRef = useRef(false);
   const authPendingRef = useRef(false);
+  const busyProductIdsRef = useRef<Set<string>>(new Set());
+  const tabRefs = useRef<Record<AdminTab, HTMLButtonElement | null>>({
+    products: null,
+    orders: null,
+    messages: null,
+  });
   const dashboardRequestIdRef = useRef(0);
+  const productsMutationVersionRef = useRef(0);
+  const formSaveAttemptRef = useRef(0);
+  const hasLoadedProductsRef = useRef(false);
+  const formSessionVersionRef = useRef(0);
+  const editingIdRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
 
   useEffect(() => {
@@ -161,6 +173,66 @@ export function AdminPage({
   }, []);
 
   const isAuthorizedAdmin = Boolean(user && !user.isAnonymous && isAdmin);
+  const authorizedSessionKey = isAuthorizedAdmin
+    ? (user?.uid || user?.email || 'admin')
+    : null;
+
+  const markProductBusy = useCallback((productId: string) => {
+    setBusyProductIds((prev) => {
+      const next = new Set(prev);
+      next.add(productId);
+      return next;
+    });
+  }, []);
+
+  const unmarkProductBusy = useCallback((productId: string) => {
+    setBusyProductIds((prev) => {
+      if (!prev.has(productId)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.delete(productId);
+      return next;
+    });
+  }, []);
+
+  const recoverProductsIfUnloaded = useCallback(
+    async (expectedVersion: number) => {
+      if (
+        !isAuthorizedAdmin ||
+        hasLoadedProductsRef.current ||
+        expectedVersion !== productsMutationVersionRef.current
+      ) {
+        return;
+      }
+      setLoadingProducts(true);
+      try {
+        const recovered = await resolvedProductRepo.listAll();
+        if (
+          !isMountedRef.current ||
+          expectedVersion !== productsMutationVersionRef.current
+        ) {
+          return;
+        }
+        hasLoadedProductsRef.current = true;
+        setProducts(recovered);
+        setProductsError(null);
+      } catch {
+        if (
+          !isMountedRef.current ||
+          expectedVersion !== productsMutationVersionRef.current
+        ) {
+          return;
+        }
+        setProductsError('Kunne ikke hente produktlisten fra databasen.');
+      } finally {
+        if (isMountedRef.current && expectedVersion === productsMutationVersionRef.current) {
+          setLoadingProducts(false);
+        }
+      }
+    },
+    [isAuthorizedAdmin, resolvedProductRepo],
+  );
 
   const loadDashboardData = useCallback(async () => {
     if (!isAuthorizedAdmin) {
@@ -168,6 +240,7 @@ export function AdminPage({
     }
 
     const requestId = ++dashboardRequestIdRef.current;
+    const productsVersion = productsMutationVersionRef.current;
     setLoadingProducts(true);
     setProductsError(null);
     setOrdersError(null);
@@ -183,10 +256,14 @@ export function AdminPage({
       return;
     }
 
-    if (productsRes.status === 'fulfilled') {
-      setProducts(productsRes.value);
-    } else {
-      setProductsError('Kunne ikke hente produktlisten fra databasen.');
+    if (productsVersion === productsMutationVersionRef.current) {
+      if (productsRes.status === 'fulfilled') {
+        hasLoadedProductsRef.current = true;
+        setProducts(productsRes.value);
+      } else {
+        setProductsError('Kunne ikke hente produktlisten fra databasen.');
+      }
+      setLoadingProducts(false);
     }
 
     if (ordersRes.status === 'fulfilled') {
@@ -200,23 +277,11 @@ export function AdminPage({
     } else {
       setMessagesError('Kunne ikke hente henvendelser akkurat nå.');
     }
-
-    setLoadingProducts(false);
   }, [isAuthorizedAdmin, resolvedContactRepo, resolvedOrderRepo, resolvedProductRepo]);
 
-  useEffect(() => {
-    if (isAuthorizedAdmin) {
-      void loadDashboardData();
-    } else {
-      dashboardRequestIdRef.current += 1;
-      setProducts([]);
-      setOrders([]);
-      setMessages([]);
-      setLoadingProducts(false);
-    }
-  }, [isAuthorizedAdmin, loadDashboardData]);
-
   const resetProductForm = useCallback(() => {
+    formSessionVersionRef.current += 1;
+    editingIdRef.current = null;
     setEditingId(null);
     setTitle('');
     setSlug('');
@@ -232,6 +297,31 @@ export function AdminPage({
     setFormFieldErrors({});
     setFormError(null);
   }, []);
+
+  useEffect(() => {
+    dashboardRequestIdRef.current += 1;
+    productsMutationVersionRef.current += 1;
+    formSaveAttemptRef.current += 1;
+    hasLoadedProductsRef.current = false;
+    savingRef.current = false;
+    setSavingProduct(false);
+    resetProductForm();
+    setStatusMessage(null);
+
+    if (authorizedSessionKey) {
+      void loadDashboardData();
+    } else {
+      setProducts([]);
+      setOrders([]);
+      setMessages([]);
+      busyProductIdsRef.current.clear();
+      setBusyProductIds(new Set());
+      setLoadingProducts(false);
+      setProductsError(null);
+      setOrdersError(null);
+      setMessagesError(null);
+    }
+  }, [authorizedSessionKey, loadDashboardData, resetProductForm]);
 
   const clearProductFieldError = (field: string) => {
     setFormFieldErrors((prev) => {
@@ -393,29 +483,47 @@ export function AdminPage({
 
     setFormFieldErrors({});
     savingRef.current = true;
+    const saveAttemptId = ++formSaveAttemptRef.current;
+    const mutationVersion = ++productsMutationVersionRef.current;
+    const formVersionAtSubmit = formSessionVersionRef.current;
+    const targetEditingId = editingIdRef.current;
     setSavingProduct(true);
 
     try {
-      const saved = editingId
-        ? await resolvedProductRepo.update(editingId, validation.value)
+      const saved = targetEditingId
+        ? await resolvedProductRepo.update(targetEditingId, validation.value)
         : await resolvedProductRepo.create(validation.value);
 
-      const refreshedList = await resolvedProductRepo.listAll();
-      await optionalCatalog?.refreshCatalog();
-
-      if (!isMountedRef.current) {
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
         return;
       }
 
+      const refreshedList = await resolvedProductRepo.listAll();
+
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
+        return;
+      }
+
+      await optionalCatalog?.refreshCatalog();
+
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
+        return;
+      }
+
+      hasLoadedProductsRef.current = true;
       setProducts(refreshedList);
-      resetProductForm();
+      setProductsError(null);
+      setLoadingProducts(false);
+      if (formSessionVersionRef.current === formVersionAtSubmit) {
+        resetProductForm();
+      }
       setStatusMessage(
         (saved?.active ?? validation.value.active)
           ? 'Produktet er lagret og publisert i butikken.'
           : 'Produktet er lagret som deaktivert (skjult fra butikken).',
       );
     } catch (err) {
-      if (!isMountedRef.current) {
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
         return;
       }
       if (err instanceof ValidationError) {
@@ -428,15 +536,24 @@ export function AdminPage({
             : 'Kunne ikke lagre produktet. Prøv igjen.',
         );
       }
+      if (!hasLoadedProductsRef.current) {
+        void recoverProductsIfUnloaded(mutationVersion);
+      } else {
+        setLoadingProducts(false);
+      }
     } finally {
-      savingRef.current = false;
-      if (isMountedRef.current) {
-        setSavingProduct(false);
+      if (saveAttemptId === formSaveAttemptRef.current) {
+        savingRef.current = false;
+        if (isMountedRef.current) {
+          setSavingProduct(false);
+        }
       }
     }
   };
 
   const handleStartEdit = (product: Product) => {
+    formSessionVersionRef.current += 1;
+    editingIdRef.current = product.id;
     setEditingId(product.id);
     setTitle(product.title);
     setSlug(product.slug);
@@ -456,67 +573,137 @@ export function AdminPage({
   };
 
   const handleToggleActive = async (product: Product) => {
+    if (busyProductIdsRef.current.has(product.id)) {
+      return;
+    }
+    busyProductIdsRef.current.add(product.id);
     setFormError(null);
     setStatusMessage(null);
-    setBusyProductId(product.id);
+    const mutationVersion = ++productsMutationVersionRef.current;
+    markProductBusy(product.id);
 
     try {
       await resolvedProductRepo.update(product.id, { active: !product.active });
-      const refreshedList = await resolvedProductRepo.listAll();
-      await optionalCatalog?.refreshCatalog();
 
-      if (!isMountedRef.current) {
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
         return;
       }
+
+      const refreshedList = await resolvedProductRepo.listAll();
+
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
+        return;
+      }
+
+      await optionalCatalog?.refreshCatalog();
+
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
+        return;
+      }
+
+      hasLoadedProductsRef.current = true;
       setProducts(refreshedList);
+      setProductsError(null);
+      setLoadingProducts(false);
       setStatusMessage(
         !product.active
           ? `«${product.title}» er aktivert i nettbutikken.`
           : `«${product.title}» er deaktivert og skjult fra nettbutikken.`,
       );
     } catch (err) {
-      if (isMountedRef.current) {
-        setFormError(
-          err instanceof Error && err.message
-            ? err.message
-            : 'Kunne ikke oppdatere produktstatus.',
-        );
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
+        return;
+      }
+      setFormError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Kunne ikke oppdatere produktstatus.',
+      );
+      if (!hasLoadedProductsRef.current) {
+        void recoverProductsIfUnloaded(mutationVersion);
       }
     } finally {
+      busyProductIdsRef.current.delete(product.id);
       if (isMountedRef.current) {
-        setBusyProductId(null);
+        unmarkProductBusy(product.id);
       }
     }
   };
 
   const handleDeleteProduct = async (product: Product) => {
+    if (busyProductIdsRef.current.has(product.id)) {
+      return;
+    }
+    busyProductIdsRef.current.add(product.id);
     setFormError(null);
     setStatusMessage(null);
-    setBusyProductId(product.id);
+    const mutationVersion = ++productsMutationVersionRef.current;
+    markProductBusy(product.id);
 
     try {
       await resolvedProductRepo.delete(product.id);
-      const refreshedList = await resolvedProductRepo.listAll();
-      await optionalCatalog?.refreshCatalog();
 
-      if (!isMountedRef.current) {
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
         return;
       }
+
+      const refreshedList = await resolvedProductRepo.listAll();
+
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
+        return;
+      }
+
+      await optionalCatalog?.refreshCatalog();
+
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
+        return;
+      }
+
+      hasLoadedProductsRef.current = true;
       setProducts(refreshedList);
-      if (editingId === product.id) {
+      setProductsError(null);
+      setLoadingProducts(false);
+      if (editingIdRef.current === product.id) {
         resetProductForm();
       }
       setStatusMessage(`«${product.title}» er slettet fra katalogen.`);
     } catch (err) {
-      if (isMountedRef.current) {
-        setFormError(
-          err instanceof Error && err.message ? err.message : 'Kunne ikke slette produktet.',
-        );
+      if (!isMountedRef.current || mutationVersion !== productsMutationVersionRef.current) {
+        return;
+      }
+      setFormError(
+        err instanceof Error && err.message ? err.message : 'Kunne ikke slette produktet.',
+      );
+      if (!hasLoadedProductsRef.current) {
+        void recoverProductsIfUnloaded(mutationVersion);
       }
     } finally {
+      busyProductIdsRef.current.delete(product.id);
       if (isMountedRef.current) {
-        setBusyProductId(null);
+        unmarkProductBusy(product.id);
       }
+    }
+  };
+
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const tabOrder: readonly AdminTab[] = ['products', 'orders', 'messages'];
+    const currentIndex = tabOrder.indexOf(activeTab);
+    let nextTab: AdminTab | undefined;
+
+    if (event.key === 'ArrowRight') {
+      nextTab = tabOrder[(currentIndex + 1) % tabOrder.length];
+    } else if (event.key === 'ArrowLeft') {
+      nextTab = tabOrder[(currentIndex - 1 + tabOrder.length) % tabOrder.length];
+    } else if (event.key === 'Home') {
+      nextTab = tabOrder[0];
+    } else if (event.key === 'End') {
+      nextTab = tabOrder[tabOrder.length - 1];
+    }
+
+    if (nextTab) {
+      event.preventDefault();
+      setActiveTab(nextTab);
+      tabRefs.current[nextTab]?.focus();
     }
   };
 
@@ -721,12 +908,17 @@ export function AdminPage({
           <div
             role="tablist"
             aria-label="Administrasjonsfaner"
+            onKeyDown={handleTabKeyDown}
             className="flex flex-wrap gap-2 border-b border-sand pb-3"
           >
             <button
+              ref={(el) => {
+                tabRefs.current.products = el;
+              }}
               id="admin-tab-products"
               type="button"
               role="tab"
+              tabIndex={activeTab === 'products' ? 0 : -1}
               aria-selected={activeTab === 'products'}
               aria-controls="admin-panel-products"
               onClick={() => setActiveTab('products')}
@@ -740,9 +932,13 @@ export function AdminPage({
             </button>
 
             <button
+              ref={(el) => {
+                tabRefs.current.orders = el;
+              }}
               id="admin-tab-orders"
               type="button"
               role="tab"
+              tabIndex={activeTab === 'orders' ? 0 : -1}
               aria-selected={activeTab === 'orders'}
               aria-controls="admin-panel-orders"
               onClick={() => setActiveTab('orders')}
@@ -756,9 +952,13 @@ export function AdminPage({
             </button>
 
             <button
+              ref={(el) => {
+                tabRefs.current.messages = el;
+              }}
               id="admin-tab-messages"
               type="button"
               role="tab"
+              tabIndex={activeTab === 'messages' ? 0 : -1}
               aria-selected={activeTab === 'messages'}
               aria-controls="admin-panel-messages"
               onClick={() => setActiveTab('messages')}
@@ -1218,7 +1418,7 @@ export function AdminPage({
                       {/* Mobile stacked cards (< 768px) */}
                       <div data-testid="admin-products-mobile" className="mt-5 space-y-3 md:hidden">
                         {products.map((product) => {
-                          const isBusy = busyProductId === product.id;
+                          const isBusy = busyProductIds.has(product.id);
                           return (
                             <article
                               key={product.id}
@@ -1227,8 +1427,8 @@ export function AdminPage({
                               <div className="flex items-start gap-3">
                                 <ProductThumbnail src={product.imageUrl} alt={product.title} />
                                 <div className="min-w-0 flex-1">
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <h3 className="font-serif text-lg font-semibold text-espresso">
+                                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                                    <h3 className="min-w-0 wrap-anywhere font-serif text-lg font-semibold text-espresso">
                                       {product.title}
                                     </h3>
                                     <span
@@ -1299,7 +1499,7 @@ export function AdminPage({
                           </thead>
                           <tbody className="divide-y divide-sand">
                             {products.map((product) => {
-                              const isBusy = busyProductId === product.id;
+                              const isBusy = busyProductIds.has(product.id);
                               return (
                                 <tr key={product.id} className="align-middle">
                                   <td className="py-3 pr-3">
@@ -1309,10 +1509,12 @@ export function AdminPage({
                                         alt={product.title}
                                       />
                                       <div className="min-w-0">
-                                        <p className="font-semibold text-espresso">
+                                        <p className="wrap-anywhere font-semibold text-espresso">
                                           {product.title}
                                         </p>
-                                        <p className="text-xs text-taupe">{product.slug}</p>
+                                        <p className="wrap-anywhere text-xs text-taupe">
+                                          {product.slug}
+                                        </p>
                                       </div>
                                     </div>
                                   </td>
@@ -1414,12 +1616,12 @@ export function AdminPage({
                         key={order.id}
                         className="rounded-lg border border-sand bg-canvas p-4 sm:p-5"
                       >
-                        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-sand pb-3">
-                          <div>
-                            <p className="font-serif text-lg font-semibold text-espresso">
+                        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3 border-b border-sand pb-3">
+                          <div className="min-w-0">
+                            <p className="wrap-anywhere font-serif text-lg font-semibold text-espresso">
                               {order.orderNumber || order.id}
                             </p>
-                            <p className="mt-0.5 text-xs text-taupe">
+                            <p className="mt-0.5 wrap-anywhere text-xs text-taupe">
                               {customerName}
                               {customerEmail ? ` · ${customerEmail}` : ''}
                               {locationLabel ? ` · ${locationLabel}` : ''}
@@ -1444,12 +1646,12 @@ export function AdminPage({
                             return (
                               <li
                                 key={`${order.id}-${idx}-${item?.productId ?? 'item'}`}
-                                className="flex items-center justify-between gap-3"
+                                className="flex min-w-0 items-center justify-between gap-3"
                               >
-                                <span>
+                                <span className="min-w-0 wrap-anywhere">
                                   {qty} × {itemTitle}
                                 </span>
-                                <span className="font-medium text-espresso tabular-nums">
+                                <span className="shrink-0 font-medium text-espresso tabular-nums">
                                   {formatNok(lineTotal)}
                                 </span>
                               </li>
@@ -1495,12 +1697,12 @@ export function AdminPage({
                       key={msg.id}
                       className="rounded-lg border border-sand bg-canvas p-4 sm:p-5"
                     >
-                      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-sand pb-3">
-                        <div>
-                          <h3 className="font-serif text-lg font-semibold text-espresso">
+                      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2 border-b border-sand pb-3">
+                        <div className="min-w-0">
+                          <h3 className="wrap-anywhere font-serif text-lg font-semibold text-espresso">
                             {msg.subject}
                           </h3>
-                          <p className="mt-0.5 text-xs text-taupe">
+                          <p className="mt-0.5 wrap-anywhere text-xs text-taupe">
                             {msg.name} · {msg.email}
                           </p>
                         </div>
@@ -1511,7 +1713,7 @@ export function AdminPage({
                           <p className="mt-1">{formatDateNb(msg.createdAt)}</p>
                         </div>
                       </div>
-                      <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-charcoal">
+                      <p className="mt-3 whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-charcoal">
                         {msg.message}
                       </p>
                     </article>

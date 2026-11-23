@@ -5,6 +5,7 @@ import { useOptionalCart } from '../../context/CartContext';
 import type { ResolvedCartItem } from '../../context/CartContext';
 import { useOptionalCatalog } from '../../context/CatalogContext';
 import { FREE_SHIPPING_THRESHOLD_NOK, formatNok } from '../../lib/format';
+import { VALIDATION_LIMITS, isValidImageUrl } from '../../lib/validators';
 import { DEFAULT_PRODUCT_IMAGE } from '../../types/domain';
 
 const FOCUSABLE_SELECTOR =
@@ -32,8 +33,11 @@ function CartDrawerItemRow({
   }, [item.product?.imageUrl]);
 
   const title = item.product?.title ?? 'Utilgjengelig produkt';
-  const imageSrc =
-    imgError || !item.product?.imageUrl ? DEFAULT_PRODUCT_IMAGE : item.product.imageUrl;
+  const safeImageUrl =
+    item.product?.imageUrl && isValidImageUrl(item.product.imageUrl)
+      ? item.product.imageUrl.trim()
+      : '';
+  const imageSrc = imgError || !safeImageUrl ? DEFAULT_PRODUCT_IMAGE : safeImageUrl;
   const maxReached = Boolean(item.product && item.quantity >= item.product.stock);
   const canIncrement = Boolean(
     item.product && item.product.active && item.quantity < item.product.stock,
@@ -61,20 +65,34 @@ function CartDrawerItemRow({
               <Link
                 to={`/produkt/${item.product.slug}`}
                 onClick={onNavigate}
-                className="line-clamp-2 text-sm font-semibold text-espresso transition-colors hover:text-bronze focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bronze"
+                className="line-clamp-2 wrap-anywhere text-sm font-semibold text-espresso transition-colors hover:text-bronze focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bronze"
               >
                 {title}
               </Link>
             ) : (
-              <p className="text-sm font-semibold text-espresso">{title}</p>
+              <p className="wrap-anywhere text-sm font-semibold text-espresso">{title}</p>
             )}
-            <p className="mt-0.5 text-xs text-taupe tabular-nums">
+            <p className="mt-0.5 wrap-anywhere text-xs text-taupe tabular-nums">
               {item.product ? formatNok(item.unitPriceNok) : `ID: ${item.productId}`}
             </p>
             {!item.available && !catalogLoading && (
               <span className="mt-1 inline-block rounded bg-linen px-2 py-0.5 text-[11px] font-medium text-error">
                 Ikke lenger tilgjengelig
               </span>
+            )}
+            {item.exceedsStock && !catalogLoading && item.product && (
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="inline-block rounded bg-linen px-2 py-0.5 text-[11px] font-medium text-error">
+                  Bare {item.product.stock} stk på lager
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onUpdateQuantity(item.productId, item.product!.stock)}
+                  className="text-[11px] font-medium text-bronze underline underline-offset-4 hover:text-espresso"
+                >
+                  Juster til maks ({item.product.stock})
+                </button>
+              </div>
             )}
           </div>
 
@@ -302,6 +320,20 @@ export function CartDrawer() {
             </div>
 
             <div className="border-t border-sand bg-ivory px-6 py-5">
+              {resolvedItems.length > VALIDATION_LIMITS.orderItemsMax && (
+                <p
+                  role="alert"
+                  className="mb-3 rounded-md border border-error/30 bg-canvas px-3 py-2 text-xs font-medium text-error"
+                >
+                  Maks {VALIDATION_LIMITS.orderItemsMax} ulike produkter per bestilling. Fjern{' '}
+                  {resolvedItems.length - VALIDATION_LIMITS.orderItemsMax} produkt(er) før utsjekk.
+                </p>
+              )}
+              {resolvedItems.length === VALIDATION_LIMITS.orderItemsMax && (
+                <p className="mb-3 rounded-md border border-sand bg-linen px-3 py-2 text-xs text-charcoal">
+                  Maksgrensen på {VALIDATION_LIMITS.orderItemsMax} ulike produkter per bestilling er nådd.
+                </p>
+              )}
               {subtotalNok > 0 && remainingForFreeShipping > 0 && (
                 <p className="mb-3 rounded-md border border-sand bg-linen px-3 py-2 text-xs text-espresso">
                   Handle for {formatNok(remainingForFreeShipping)} mer for gratis frakt

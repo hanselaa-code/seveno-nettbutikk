@@ -52,6 +52,8 @@ export function CatalogProvider({ children, productRepository }: CatalogProvider
   const [isUsingFallback, setIsUsingFallback] = useState<boolean>(!hasRemoteSource);
 
   const isMountedRef = useRef(true);
+  const loadRequestIdRef = useRef(0);
+  const hasAttemptedInitialSeedRef = useRef(false);
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -66,64 +68,80 @@ export function CatalogProvider({ children, productRepository }: CatalogProvider
     return getProductRepository();
   }, [productRepository]);
 
-  const loadCatalog = useCallback(async () => {
-    const repo = resolveRepository();
-    if (repo instanceof LocalProductRepository) {
-      const active = await repo.listActive();
-      if (!isMountedRef.current) return;
-      setProducts(active);
-      setLoading(false);
-      setIsUsingFallback(true);
-      setError(null);
-      return;
-    }
-
-    if (isMountedRef.current) {
-      setLoading(true);
-      setError(null);
-    }
-
-    try {
-      let active = await repo.listActive();
-
-      if (active.length === 0) {
-        try {
-          await seedCatalog(repo);
-          active = await repo.listActive();
-        } catch {
-          if (!isMountedRef.current) return;
-          setProducts(getStarterProducts());
-          setIsUsingFallback(true);
-          setError(null);
-          return;
-        }
+  const loadCatalog = useCallback(
+    async (options?: { allowInitialSeed?: boolean }) => {
+      const requestId = ++loadRequestIdRef.current;
+      const repo = resolveRepository();
+      if (repo instanceof LocalProductRepository) {
+        const active = await repo.listActive();
+        if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+        setProducts(active);
+        setLoading(false);
+        setIsUsingFallback(true);
+        setError(null);
+        return;
       }
 
-      if (!isMountedRef.current) return;
-      if (active.length > 0) {
+      if (isMountedRef.current) {
+        setLoading(true);
+        setError(null);
+      }
+
+      try {
+        let active = await repo.listActive();
+        if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+
+        const shouldAttemptSeed =
+          active.length === 0 &&
+          options?.allowInitialSeed === true &&
+          !hasAttemptedInitialSeedRef.current;
+
+        if (shouldAttemptSeed) {
+          hasAttemptedInitialSeedRef.current = true;
+          try {
+            const seedResult = await seedCatalog(repo);
+            if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+            if (seedResult.created > 0) {
+              active = await repo.listActive();
+              if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+            }
+          } catch {
+            if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
+            setProducts(getStarterProducts());
+            setIsUsingFallback(true);
+            setError(null);
+            return;
+          }
+        } else if (active.length > 0) {
+          hasAttemptedInitialSeedRef.current = true;
+        }
+
+        if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
         setProducts(active);
         setIsUsingFallback(false);
         setError(null);
-      } else {
+      } catch {
+        if (!isMountedRef.current || requestId !== loadRequestIdRef.current) return;
         setProducts(getStarterProducts());
         setIsUsingFallback(true);
         setError(null);
+      } finally {
+        if (isMountedRef.current && requestId === loadRequestIdRef.current) {
+          setLoading(false);
+        }
       }
-    } catch {
-      if (!isMountedRef.current) return;
-      setProducts(getStarterProducts());
-      setIsUsingFallback(true);
-      setError(null);
-    } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-      }
-    }
-  }, [resolveRepository]);
+    },
+    [resolveRepository],
+  );
+
+  const refreshCatalog = useCallback(async () => {
+    hasAttemptedInitialSeedRef.current = true;
+    await loadCatalog({ allowInitialSeed: false });
+  }, [loadCatalog]);
 
   useEffect(() => {
     if (hasRemoteSource) {
-      void loadCatalog();
+      void loadCatalog({ allowInitialSeed: true });
       return;
     }
     const repo = resolveRepository();
@@ -197,7 +215,7 @@ export function CatalogProvider({ children, productRepository }: CatalogProvider
       loading,
       error,
       isUsingFallback,
-      refreshCatalog: loadCatalog,
+      refreshCatalog,
       getProductByIdOrSlug,
       getProductsByCategory,
       resolveProductByIdOrSlug,
@@ -207,7 +225,7 @@ export function CatalogProvider({ children, productRepository }: CatalogProvider
       loading,
       error,
       isUsingFallback,
-      loadCatalog,
+      refreshCatalog,
       getProductByIdOrSlug,
       getProductsByCategory,
       resolveProductByIdOrSlug,

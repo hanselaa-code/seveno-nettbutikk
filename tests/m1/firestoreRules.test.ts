@@ -165,11 +165,11 @@ describe('Firebase configuration & Firestore security rules (M1)', () => {
         /'admin' in request\.auth\.token\s*&&\s*request\.auth\.token\.admin == true/,
       );
       expect(isAdminBlock).toMatch(
-        /'email' in request\.auth\.token\s*&&\s*'email_verified' in request\.auth\.token[\s\S]*request\.auth\.token\.email == 'hanselaa@gmail\.com'[\s\S]*request\.auth\.token\.email_verified == true/,
+        /'email' in request\.auth\.token\s*&&\s*'email_verified' in request\.auth\.token[\s\S]*request\.auth\.token\.email\.lower\(\) == 'hanselaa@gmail\.com'[\s\S]*request\.auth\.token\.email_verified == true/,
       );
 
       expect(rules).toContain('request.auth.token.admin == true');
-      expect(rules).toContain("request.auth.token.email == 'hanselaa@gmail.com'");
+      expect(rules).toContain("request.auth.token.email.lower() == 'hanselaa@gmail.com'");
       expect(rules).toContain('request.auth.token.email_verified == true');
       expect(rules).toContain(
         'exists(/databases/$(database)/documents/admins/$(request.auth.uid))',
@@ -206,9 +206,13 @@ describe('Firebase configuration & Firestore security rules (M1)', () => {
         "isAdmin() || (isSignedIn() && resource != null && 'ownerUid' in resource.data && resource.data.ownerUid == request.auth.uid)",
       );
       expect(ordersBlock).toMatch(
-        /allow create:[\s\S]*isSignedIn\(\)[\s\S]*isValidOrder\(request\.resource\.data\)/,
+        /allow create:\s*if\s+isSignedIn\(\)\s*&&\s*isValidOrder\(\)/,
       );
-      expect(ordersBlock).toContain('request.resource.data.ownerUid == request.auth.uid');
+      const isValidOrderFn =
+        rules.match(/function\s+isValidOrder\(\)\s*\{[\s\S]*?\n\s*\}/)?.[0] ?? '';
+      expect(isValidOrderFn).toContain('d.ownerUid == request.auth.uid');
+      expect(isValidOrderFn).toContain("d.status == 'confirmed'");
+      expect(isValidOrderFn).toContain('isRecent(d.createdAt)');
       expect(ordersBlock).toMatch(
         /allow update:[\s\S]*isAdmin\(\)[\s\S]*isValidOrderUpdate\(request\.resource\.data\)/,
       );
@@ -229,13 +233,29 @@ describe('Firebase configuration & Firestore security rules (M1)', () => {
     it('enforces hasOnly, hasAll, numeric ranges, and string size caps', () => {
       expect(rules).toContain('hasOnlyAllowedFields');
       expect(rules).toContain('hasRequiredFields');
-      expect(rules).toContain('data.priceNok > 0');
+      expect(rules).toContain('data.priceNok >= 1');
       expect(rules).toContain('data.stock >= 0');
-      expect(rules).toContain('data.totalNok > 0');
+      expect(rules).toContain('tot >= 1');
       expect(rules).toContain('items.size() >= 1');
-      expect(rules).toContain('items.size() <= 50');
+      expect(rules).toContain('items.size() <= 4');
+      expect(rules).toContain('it.title.size() <= 140');
       expect(rules).toContain('data.description.size() <= 4000');
       expect(rules).toContain('data.message.size() <= 3000');
+    });
+
+    it('enforces totalNok/subtotalNok arithmetic, validates all items against products, restricts paid_test to test_order, and requires digits in phone', () => {
+      expect(rules).toContain('!email.matches(".*\\\\.\\\\..*")');
+      expect(rules).toContain('^(?:\\\\+47|0047)?[\\\\s-]*(?:\\\\d[\\\\s-]*){8}$');
+      expect(rules).toContain('isValidOrderItem(items[3])');
+      expect(rules).toContain('let p = get(/databases/$(database)/documents/products/$(it.productId));');
+      expect(rules).toContain('math.abs(sub - (');
+      expect(rules).toContain('math.abs(tot - (sub + ship)) < 0.01');
+      expect(rules).toContain(
+        "(d.paymentProvider == 'test_order' && d.paymentStatus == 'paid_test')",
+      );
+      expect(rules).toContain(
+        "(d.paymentProvider in ['klarna', 'vipps'] && d.paymentStatus == 'pending_provider')",
+      );
     });
 
     it('guards every resource.data.<field> access in read rules and transition helpers', () => {

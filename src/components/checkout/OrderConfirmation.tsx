@@ -78,14 +78,17 @@ export function OrderConfirmation({ order, providerDisplayName }: OrderConfirmat
 
           <ul className="mt-4 divide-y divide-sand">
             {order.items.map((item) => (
-              <li key={item.productId} className="flex items-start justify-between gap-4 py-3">
-                <div>
-                  <p className="text-sm font-semibold text-espresso">{item.title}</p>
+              <li
+                key={item.productId}
+                className="flex min-w-0 items-start justify-between gap-4 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="wrap-anywhere text-sm font-semibold text-espresso">{item.title}</p>
                   <p className="mt-0.5 text-xs text-taupe tabular-nums">
                     {item.quantity} × {formatNok(item.unitPriceNok)}
                   </p>
                 </div>
-                <span className="text-sm font-semibold text-espresso tabular-nums">
+                <span className="shrink-0 text-sm font-semibold text-espresso tabular-nums">
                   {formatNok(item.lineTotalNok)}
                 </span>
               </li>
@@ -125,12 +128,12 @@ export function OrderConfirmation({ order, providerDisplayName }: OrderConfirmat
             >
               Kunde- og leveringsadresse
             </h2>
-            <div className="mt-3 space-y-1 text-sm text-charcoal">
-              <p className="font-semibold text-espresso">{order.customer.name}</p>
-              <p>{order.customer.email}</p>
-              <p>{order.customer.phone}</p>
-              <p className="pt-2">{order.shippingAddress.street}</p>
-              <p>
+            <div className="mt-3 min-w-0 space-y-1 text-sm text-charcoal">
+              <p className="wrap-anywhere font-semibold text-espresso">{order.customer.name}</p>
+              <p className="wrap-anywhere">{order.customer.email}</p>
+              <p className="wrap-anywhere">{order.customer.phone}</p>
+              <p className="wrap-anywhere pt-2">{order.shippingAddress.street}</p>
+              <p className="wrap-anywhere">
                 {order.shippingAddress.postalCode} {order.shippingAddress.city}
               </p>
             </div>
@@ -155,9 +158,11 @@ export function OrderConfirmation({ order, providerDisplayName }: OrderConfirmat
                 <dt className="text-taupe">Betalingsstatus</dt>
                 <dd className="font-medium text-espresso">{resolvedPaymentStatus}</dd>
               </div>
-              <div className="flex items-center justify-between gap-2">
-                <dt className="text-taupe">Betalingsreferanse</dt>
-                <dd className="font-mono text-xs text-espresso">{order.paymentReference}</dd>
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <dt className="shrink-0 text-taupe">Betalingsreferanse</dt>
+                <dd className="min-w-0 wrap-anywhere font-mono text-xs text-espresso">
+                  {order.paymentReference}
+                </dd>
               </div>
             </dl>
           </section>

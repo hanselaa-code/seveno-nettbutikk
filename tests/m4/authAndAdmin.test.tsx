@@ -21,6 +21,7 @@ import {
   getProductRepository,
 } from '../../src/repositories/productRepository';
 import type { IProductRepository } from '../../src/repositories/productRepository';
+import { getStarterProducts } from '../../src/repositories/seedCatalog';
 import { DEFAULT_PRODUCT_IMAGE } from '../../src/types/domain';
 import type { Order, Product } from '../../src/types/domain';
 
@@ -1012,5 +1013,900 @@ describe('M4 Iteration 2 Regression & Hardening Tests', () => {
       },
       { timeout: 3000 },
     );
+  });
+
+  it('AdminPage prevents in-flight loadDashboardData from rendering uncommitted products while create() is pending', async () => {
+    const baseRepo = new LocalProductRepository('admin_race_guard_test');
+    const starter = await baseRepo.listAll();
+    const user = userEvent.setup({ delay: null });
+
+    let resolveInitialList!: (value: Product[]) => void;
+    let resolveCreate!: (value: Product) => void;
+    let createdCommitted = false;
+
+    const raceProduct: Product = {
+      id: 'race-product-1',
+      slug: 'race-produkt',
+      title: 'Race Testprodukt',
+      categorySlug: 'seveno-living',
+      categoryName: 'Seveno living',
+      description: 'Produkt som tester at in-flight dashboard fetch ikke lekker uforpliktet write.',
+      priceNok: 1490,
+      stock: 5,
+      imageUrl: DEFAULT_PRODUCT_IMAGE,
+      specs: [],
+      active: true,
+      createdAt: '2026-11-22T20:00:00.000Z',
+      updatedAt: '2026-11-22T20:00:00.000Z',
+    };
+
+    let listCallCount = 0;
+    const racingRepo: IProductRepository = {
+      listAll: vi.fn(() => {
+        listCallCount += 1;
+        if (listCallCount === 1) {
+          return new Promise<Product[]>((resolve) => {
+            resolveInitialList = resolve;
+          });
+        }
+        return Promise.resolve(createdCommitted ? [...starter, raceProduct] : starter);
+      }),
+      listActive: () => Promise.resolve(createdCommitted ? [...starter, raceProduct] : starter),
+      listByCategory: baseRepo.listByCategory.bind(baseRepo),
+      getById: baseRepo.getById.bind(baseRepo),
+      getBySlug: baseRepo.getBySlug.bind(baseRepo),
+      create: vi.fn(
+        () =>
+          new Promise<Product>((resolve) => {
+            resolveCreate = (prod) => {
+              createdCommitted = true;
+              resolve(prod);
+            };
+          }),
+      ),
+      update: baseRepo.update.bind(baseRepo),
+      delete: baseRepo.delete.bind(baseRepo),
+    };
+
+    const adminUser = {
+      uid: 'admin-race',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <AdminPage productRepository={racingRepo} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText('Tittel'), 'Race Testprodukt');
+    await user.type(screen.getByLabelText('Pris (NOK)'), '1490');
+    fireEvent.change(screen.getByLabelText('Beskrivelse'), {
+      target: {
+        value: 'Produkt som tester at in-flight dashboard fetch ikke lekker uforpliktet write.',
+      },
+    });
+    await user.click(screen.getByRole('button', { name: 'Lagre produkt' }));
+
+    expect(screen.getByRole('button', { name: 'Lagrer ...' })).toBeDisabled();
+
+    // Initial loadDashboardData resolves while create() is still pending,
+    // returning the uncommitted product from local SDK cache — must be ignored!
+    await act(async () => {
+      resolveInitialList([...starter, raceProduct]);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText('Race Testprodukt')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Lagrer ...' })).toBeDisabled();
+
+    // Now commit create() -> refreshed list renders Race Testprodukt and resets form
+    await act(async () => {
+      resolveCreate(raceProduct);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Race Testprodukt').length).toBeGreaterThanOrEqual(1);
+    });
+    expect(screen.getByRole('button', { name: 'Lagre produkt' })).toBeEnabled();
+  });
+
+  it('AdminPage prevents slower concurrent toggleActive(A) listAll() from resurrecting deleted product B', async () => {
+    const baseRepo = new LocalProductRepository('admin_concurrent_row_mutations_test');
+    const prodA: Product = {
+      id: 'prod-a',
+      slug: 'produkt-a',
+      title: 'Produkt A',
+      categorySlug: 'seveno-living',
+      categoryName: 'Seveno living',
+      description: 'Beskrivelse for produkt A med tilstrekkelig lengde.',
+      priceNok: 500,
+      stock: 10,
+      imageUrl: DEFAULT_PRODUCT_IMAGE,
+      specs: [],
+      active: true,
+      createdAt: '2026-11-22T20:00:00.000Z',
+      updatedAt: '2026-11-22T20:00:00.000Z',
+    };
+    const prodB: Product = {
+      id: 'prod-b',
+      slug: 'produkt-b',
+      title: 'Produkt B',
+      categorySlug: 'seveno-home',
+      categoryName: 'Seveno home',
+      description: 'Beskrivelse for produkt B med tilstrekkelig lengde.',
+      priceNok: 700,
+      stock: 5,
+      imageUrl: DEFAULT_PRODUCT_IMAGE,
+      specs: [],
+      active: true,
+      createdAt: '2026-11-22T20:00:00.000Z',
+      updatedAt: '2026-11-22T20:00:00.000Z',
+    };
+    const prodADeactivated: Product = { ...prodA, active: false };
+
+    let listCallCount = 0;
+    let resolveToggleList!: (value: Product[]) => void;
+
+    const concurrentRepo: IProductRepository = {
+      listAll: vi.fn(() => {
+        listCallCount += 1;
+        if (listCallCount === 1) {
+          return Promise.resolve([prodA, prodB]);
+        }
+        if (listCallCount === 2) {
+          // Slower listAll() from toggleActive(A)
+          return new Promise<Product[]>((resolve) => {
+            resolveToggleList = resolve;
+          });
+        }
+        // Fast listAll() from delete(B)
+        return Promise.resolve([prodADeactivated]);
+      }),
+      listActive: () => Promise.resolve([prodADeactivated]),
+      listByCategory: baseRepo.listByCategory.bind(baseRepo),
+      getById: baseRepo.getById.bind(baseRepo),
+      getBySlug: baseRepo.getBySlug.bind(baseRepo),
+      create: baseRepo.create.bind(baseRepo),
+      update: vi.fn().mockResolvedValue(prodADeactivated),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const adminUser = {
+      uid: 'admin-concurrent',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+
+    const user = userEvent.setup({ delay: null });
+    render(
+      <MemoryRouter>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <AdminPage productRepository={concurrentRepo} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(2\)/i })).toBeInTheDocument();
+    });
+
+    const desktopList = screen.getByTestId('admin-products-desktop');
+    const rowA = within(desktopList).getByText('Produkt A').closest('tr')!;
+    const rowB = within(desktopList).getByText('Produkt B').closest('tr')!;
+
+    // Trigger toggleActive(A) (slow listAll) then immediately delete(B) (fast listAll)
+    await user.click(within(rowA).getByRole('button', { name: 'Deaktiver' }));
+    await user.click(within(rowB).getByRole('button', { name: 'Slett' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(1\)/i })).toBeInTheDocument();
+    });
+    expect(within(desktopList).queryByText('Produkt B')).not.toBeInTheDocument();
+
+    // Now resolve toggleActive(A)'s stale slower listAll() with [prodADeactivated, prodB]
+    await act(async () => {
+      resolveToggleList([prodADeactivated, prodB]);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('tab', { name: /Produkter \(1\)/i })).toBeInTheDocument();
+    expect(within(desktopList).queryByText('Produkt B')).not.toBeInTheDocument();
+  });
+
+  it('AdminPage prevents in-flight create() refresh from Session 1 overwriting Session 2 after signOut -> signIn', async () => {
+    const baseRepo = new LocalProductRepository('admin_session_epoch_test');
+    const baseProduct: Product = {
+      id: 'base-prod',
+      slug: 'baseprodukt',
+      title: 'Baseprodukt',
+      categorySlug: 'seveno-living',
+      categoryName: 'Seveno living',
+      description: 'Grunnleggende produkt i katalogen for sesjonstest.',
+      priceNok: 990,
+      stock: 8,
+      imageUrl: DEFAULT_PRODUCT_IMAGE,
+      specs: [],
+      active: true,
+      createdAt: '2026-11-22T20:00:00.000Z',
+      updatedAt: '2026-11-22T20:00:00.000Z',
+    };
+    const ghostProduct: Product = {
+      ...baseProduct,
+      id: 'ghost-prod',
+      slug: 'spokelsesprodukt',
+      title: 'Spøkelsesprodukt',
+    };
+
+    let listCallCount = 0;
+    let resolveSession1CreateList!: (value: Product[]) => void;
+
+    const epochRepo: IProductRepository = {
+      listAll: vi.fn(() => {
+        listCallCount += 1;
+        if (listCallCount === 1) {
+          return Promise.resolve([baseProduct]);
+        }
+        if (listCallCount === 2) {
+          // Session 1 create() post-write listAll() hangs across signOut -> signIn
+          return new Promise<Product[]>((resolve) => {
+            resolveSession1CreateList = resolve;
+          });
+        }
+        // Session 2 loadDashboardData()
+        return Promise.resolve([baseProduct]);
+      }),
+      listActive: () => Promise.resolve([baseProduct]),
+      listByCategory: baseRepo.listByCategory.bind(baseRepo),
+      getById: baseRepo.getById.bind(baseRepo),
+      getBySlug: baseRepo.getBySlug.bind(baseRepo),
+      create: vi.fn().mockResolvedValue(ghostProduct),
+      update: baseRepo.update.bind(baseRepo),
+      delete: baseRepo.delete.bind(baseRepo),
+    };
+
+    const admin1 = {
+      uid: 'admin-session-1',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin 1',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+    const admin2 = {
+      uid: 'admin-session-2',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin 2',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+
+    const user = userEvent.setup({ delay: null });
+    const { rerender } = render(
+      <MemoryRouter>
+        <AuthProvider initialUser={admin1} initialIsAdmin={true}>
+          <AdminPage productRepository={epochRepo} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(1\)/i })).toBeInTheDocument();
+    });
+
+    await user.type(screen.getByLabelText('Tittel'), 'Spøkelsesprodukt');
+    await user.type(screen.getByLabelText('Pris (NOK)'), '990');
+    fireEvent.change(screen.getByLabelText('Beskrivelse'), {
+      target: { value: 'Produkt opprettet rett før utlogging i sesjon 1.' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Lagre produkt' }));
+
+    await waitFor(() => {
+      expect(epochRepo.create).toHaveBeenCalledTimes(1);
+    });
+
+    // Sign out -> Sign in as Session 2 while Session 1's listAll() is still pending
+    rerender(
+      <MemoryRouter>
+        <AuthProvider initialUser={null} initialIsAdmin={false}>
+          <AdminPage productRepository={epochRepo} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+    rerender(
+      <MemoryRouter>
+        <AuthProvider initialUser={admin2} initialIsAdmin={true}>
+          <AdminPage productRepository={epochRepo} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(1\)/i })).toBeInTheDocument();
+    });
+
+    // Resolve Session 1's stale listAll()
+    await act(async () => {
+      resolveSession1CreateList([baseProduct, ghostProduct]);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('tab', { name: /Produkter \(1\)/i })).toBeInTheDocument();
+    expect(screen.queryByText('Spøkelsesprodukt')).not.toBeInTheDocument();
+    expect(screen.queryByText('Produktet er lagret og publisert i butikken.')).not.toBeInTheDocument();
+  });
+
+  it('AdminPage recovers existing catalog products when create() fails while initial loadDashboardData() is pending', async () => {
+    const baseRepo = new LocalProductRepository('admin_failed_create_recovery_test');
+    const existingProduct: Product = {
+      id: 'existing-prod',
+      slug: 'eksisterende-vare',
+      title: 'Eksisterende Vare',
+      categorySlug: 'seveno-home',
+      categoryName: 'Seveno home',
+      description: 'Eksisterende produkt som ikke skal forsvinne ved feilet opprettelse.',
+      priceNok: 1290,
+      stock: 4,
+      imageUrl: DEFAULT_PRODUCT_IMAGE,
+      specs: [],
+      active: true,
+      createdAt: '2026-11-22T20:00:00.000Z',
+      updatedAt: '2026-11-22T20:00:00.000Z',
+    };
+
+    let listCallCount = 0;
+    let resolveInitialList!: (value: Product[]) => void;
+
+    const recoveryRepo: IProductRepository = {
+      listAll: vi.fn(() => {
+        listCallCount += 1;
+        if (listCallCount === 1) {
+          return new Promise<Product[]>((resolve) => {
+            resolveInitialList = resolve;
+          });
+        }
+        return Promise.resolve([existingProduct]);
+      }),
+      listActive: () => Promise.resolve([existingProduct]),
+      listByCategory: baseRepo.listByCategory.bind(baseRepo),
+      getById: baseRepo.getById.bind(baseRepo),
+      getBySlug: baseRepo.getBySlug.bind(baseRepo),
+      create: vi.fn().mockRejectedValue(new Error('Permission denied')),
+      update: baseRepo.update.bind(baseRepo),
+      delete: baseRepo.delete.bind(baseRepo),
+    };
+
+    const adminUser = {
+      uid: 'admin-recovery',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+
+    const user = userEvent.setup({ delay: null });
+    render(
+      <MemoryRouter>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <AdminPage productRepository={recoveryRepo} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    // Submit create() before initial loadDashboardData() settles
+    await user.type(screen.getByLabelText('Tittel'), 'Feilende Produkt');
+    await user.type(screen.getByLabelText('Pris (NOK)'), '499');
+    fireEvent.change(screen.getByLabelText('Beskrivelse'), {
+      target: { value: 'Et produkt som blir avvist av backend-regler.' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Lagre produkt' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Permission denied');
+    });
+
+    // Resolve slow initial listAll() too; recovery fetch ensures existing product is visible
+    await act(async () => {
+      resolveInitialList([existingProduct]);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(1\)/i })).toBeInTheDocument();
+    });
+    const desktopList = screen.getByTestId('admin-products-desktop');
+    expect(within(desktopList).getByText('Eksisterende Vare')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Permission denied');
+  });
+
+  it('AdminPage resets form save lock on session change and prevents stale Session 1 finally from unlocking Session 2 save (Probe 2e-attack)', async () => {
+    const baseRepo = new LocalProductRepository('admin_probe_2e_attack_test');
+    const baseProduct: Product = {
+      id: 'base-prod-2e',
+      slug: 'baseprodukt-2e',
+      title: 'Baseprodukt 2e',
+      categorySlug: 'seveno-living',
+      categoryName: 'Seveno living',
+      description: 'Grunnleggende produkt i katalogen for 2e-attack regresjonstest.',
+      priceNok: 990,
+      stock: 8,
+      imageUrl: DEFAULT_PRODUCT_IMAGE,
+      specs: [],
+      active: true,
+      createdAt: '2026-11-22T20:00:00.000Z',
+      updatedAt: '2026-11-22T20:00:00.000Z',
+    };
+    const session2Product: Product = {
+      ...baseProduct,
+      id: 'session2-prod',
+      slug: 'sesjon-2-produkt',
+      title: 'Sesjon 2 Produkt',
+      priceNok: 890,
+    };
+
+    let createCallCount = 0;
+    let rejectCreate1!: (err: Error) => void;
+    let resolveCreate2!: (value: Product) => void;
+    let session2Committed = false;
+
+    const attackRepo: IProductRepository = {
+      listAll: vi.fn(() =>
+        Promise.resolve(session2Committed ? [baseProduct, session2Product] : [baseProduct]),
+      ),
+      listActive: () =>
+        Promise.resolve(session2Committed ? [baseProduct, session2Product] : [baseProduct]),
+      listByCategory: baseRepo.listByCategory.bind(baseRepo),
+      getById: baseRepo.getById.bind(baseRepo),
+      getBySlug: baseRepo.getBySlug.bind(baseRepo),
+      create: vi.fn(() => {
+        createCallCount += 1;
+        if (createCallCount === 1) {
+          return new Promise<Product>((_resolve, reject) => {
+            rejectCreate1 = reject;
+          });
+        }
+        return new Promise<Product>((resolve) => {
+          resolveCreate2 = (prod) => {
+            session2Committed = true;
+            resolve(prod);
+          };
+        });
+      }),
+      update: baseRepo.update.bind(baseRepo),
+      delete: baseRepo.delete.bind(baseRepo),
+    };
+
+    const admin1 = {
+      uid: 'admin-2e-1',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin 1',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+    const admin2 = {
+      uid: 'admin-2e-2',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin 2',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+
+    const user = userEvent.setup({ delay: null });
+    const { rerender } = render(
+      <MemoryRouter>
+        <AuthProvider initialUser={admin1} initialIsAdmin={true}>
+          <AdminPage productRepository={attackRepo} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(1\)/i })).toBeInTheDocument();
+    });
+
+    await user.type(screen.getByLabelText('Tittel'), 'Hengende Produkt');
+    await user.type(screen.getByLabelText('Pris (NOK)'), '790');
+    fireEvent.change(screen.getByLabelText('Beskrivelse'), {
+      target: { value: 'Produkt fra sesjon 1 der create() fortsatt henger.' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Lagre produkt' }));
+    expect(screen.getByRole('button', { name: 'Lagrer ...' })).toBeDisabled();
+
+    // Sign out -> Sign in as Session 2 BEFORE Session 1's create() settles
+    rerender(
+      <MemoryRouter>
+        <AuthProvider initialUser={null} initialIsAdmin={false}>
+          <AdminPage productRepository={attackRepo} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+    rerender(
+      <MemoryRouter>
+        <AuthProvider initialUser={admin2} initialIsAdmin={true}>
+          <AdminPage productRepository={attackRepo} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(1\)/i })).toBeInTheDocument();
+    });
+
+    // Session 2 submit button MUST be enabled and stale form fields cleared
+    expect(screen.getByRole('button', { name: 'Lagre produkt' })).toBeEnabled();
+    expect(screen.getByLabelText('Tittel')).toHaveValue('');
+
+    // Start Session 2 save
+    await user.type(screen.getByLabelText('Tittel'), 'Sesjon 2 Produkt');
+    await user.type(screen.getByLabelText('Pris (NOK)'), '890');
+    fireEvent.change(screen.getByLabelText('Beskrivelse'), {
+      target: { value: 'Gyldig produkt opprettet i sesjon 2.' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Lagre produkt' }));
+    expect(screen.getByRole('button', { name: 'Lagrer ...' })).toBeDisabled();
+
+    // Now Session 1's hanging create() fails late — MUST NOT unlock Session 2's active save
+    await act(async () => {
+      rejectCreate1(new Error('Late Session 1 error'));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole('button', { name: 'Lagrer ...' })).toBeDisabled();
+    expect(screen.queryByText('Late Session 1 error')).not.toBeInTheDocument();
+
+    // Now Session 2 create() succeeds cleanly
+    await act(async () => {
+      resolveCreate2(session2Product);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(2\)/i })).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: 'Lagre produkt' })).toBeEnabled();
+    expect(screen.queryByText('Hengende Produkt')).not.toBeInTheDocument();
+  });
+
+  it('AdminPage preserves Produkt B edit form when deleting Produkt A while Produkt A was previously being edited (Probe 2h-2)', async () => {
+    const baseRepo = new LocalProductRepository('admin_probe_2h2_test');
+    const prodA: Product = {
+      id: 'prod-a-2h2',
+      slug: 'produkt-a-2h2',
+      title: 'Produkt A',
+      categorySlug: 'seveno-living',
+      categoryName: 'Seveno living',
+      description: 'Beskrivelse for produkt A i 2h-2 regresjonstest.',
+      priceNok: 500,
+      stock: 10,
+      imageUrl: DEFAULT_PRODUCT_IMAGE,
+      specs: [],
+      active: true,
+      createdAt: '2026-11-22T20:00:00.000Z',
+      updatedAt: '2026-11-22T20:00:00.000Z',
+    };
+    const prodB: Product = {
+      id: 'prod-b-2h2',
+      slug: 'produkt-b-2h2',
+      title: 'Produkt B',
+      categorySlug: 'seveno-home',
+      categoryName: 'Seveno home',
+      description: 'Beskrivelse for produkt B i 2h-2 regresjonstest.',
+      priceNok: 750,
+      stock: 4,
+      imageUrl: DEFAULT_PRODUCT_IMAGE,
+      specs: [],
+      active: true,
+      createdAt: '2026-11-22T20:00:00.000Z',
+      updatedAt: '2026-11-22T20:00:00.000Z',
+    };
+
+    let deletedA = false;
+    let resolveDeleteA!: () => void;
+
+    const deleteRaceRepo: IProductRepository = {
+      listAll: vi.fn(() => Promise.resolve(deletedA ? [prodB] : [prodA, prodB])),
+      listActive: () => Promise.resolve(deletedA ? [prodB] : [prodA, prodB]),
+      listByCategory: baseRepo.listByCategory.bind(baseRepo),
+      getById: baseRepo.getById.bind(baseRepo),
+      getBySlug: baseRepo.getBySlug.bind(baseRepo),
+      create: baseRepo.create.bind(baseRepo),
+      update: baseRepo.update.bind(baseRepo),
+      delete: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveDeleteA = () => {
+              deletedA = true;
+              resolve();
+            };
+          }),
+      ),
+    };
+
+    const adminUser = {
+      uid: 'admin-2h2',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+
+    const user = userEvent.setup({ delay: null });
+    render(
+      <MemoryRouter>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <AdminPage productRepository={deleteRaceRepo} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(2\)/i })).toBeInTheDocument();
+    });
+
+    const desktopList = screen.getByTestId('admin-products-desktop');
+    const rowA = within(desktopList).getByText('Produkt A').closest('tr')!;
+    const rowB = within(desktopList).getByText('Produkt B').closest('tr')!;
+
+    // 1. Start editing Produkt A
+    await user.click(within(rowA).getByRole('button', { name: 'Rediger' }));
+    expect(screen.getByRole('heading', { name: 'Rediger produkt' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Tittel')).toHaveValue('Produkt A');
+
+    // 2. Click Slett on Produkt A (delete awaits)
+    await user.click(within(rowA).getByRole('button', { name: 'Slett' }));
+
+    // 3. Switch edit target to Produkt B while delete(A) is still pending
+    await user.click(within(rowB).getByRole('button', { name: 'Rediger' }));
+    expect(screen.getByRole('heading', { name: 'Rediger produkt' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Tittel')).toHaveValue('Produkt B');
+
+    // 4. Resolve delete(A) -> MUST NOT wipe Produkt B's active edit form
+    await act(async () => {
+      resolveDeleteA();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(1\)/i })).toBeInTheDocument();
+    });
+    expect(screen.getByRole('heading', { name: 'Rediger produkt' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Tittel')).toHaveValue('Produkt B');
+  });
+
+  it('CatalogProvider ignores stale initial listActive() resolution when concurrent refreshCatalog() completes first', async () => {
+    const starter = getStarterProducts();
+    const newProd: Product = {
+      ...starter[0],
+      id: 'new-prod-race',
+      slug: 'nytt-produkt',
+      title: 'Ny Produkt',
+    };
+
+    let resolveInitial!: (products: Product[]) => void;
+    let resolveRefresh!: (products: Product[]) => void;
+    const listActiveMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Product[]>((resolve) => {
+            resolveInitial = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<Product[]>((resolve) => {
+            resolveRefresh = resolve;
+          }),
+      );
+
+    const raceRepo: IProductRepository = {
+      listAll: vi.fn().mockResolvedValue([]),
+      listActive: listActiveMock,
+      listByCategory: vi.fn().mockResolvedValue([]),
+      getById: vi.fn().mockResolvedValue(null),
+      getBySlug: vi.fn().mockResolvedValue(null),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    };
+
+    function RaceProbe() {
+      const { products, refreshCatalog } = useCatalog();
+      return (
+        <div>
+          <span data-testid="race-titles">{products.map((p) => p.title).join('|')}</span>
+          <button type="button" onClick={() => void refreshCatalog()}>
+            RefreshRace
+          </button>
+        </div>
+      );
+    }
+
+    const user = userEvent.setup({ delay: null });
+    render(
+      <CatalogProvider productRepository={raceRepo}>
+        <RaceProbe />
+      </CatalogProvider>,
+    );
+
+    // Trigger faster refreshCatalog() while initial load is still in flight
+    await user.click(screen.getByRole('button', { name: 'RefreshRace' }));
+
+    await act(async () => {
+      resolveRefresh([starter[0], newProd]);
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('race-titles')).toHaveTextContent('Army sekk|Ny Produkt');
+
+    // Now resolve the older stale initial listActive() -> must NOT overwrite newer catalog
+    await act(async () => {
+      resolveInitial([starter[0]]);
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('race-titles')).toHaveTextContent('Army sekk|Ny Produkt');
+  });
+
+  it('CatalogProvider with remote IProductRepository does NOT re-create deleted products on refresh or expose fake starter products when all products are deactivated', async () => {
+    const starter = getStarterProducts();
+    const deactivated = starter.map((p) => ({ ...p, active: false }));
+    const createMock = vi.fn();
+
+    const remoteDeactivatedRepo: IProductRepository = {
+      listAll: vi.fn().mockResolvedValue(deactivated),
+      listActive: vi.fn().mockResolvedValue([]),
+      listByCategory: vi.fn().mockResolvedValue([]),
+      getById: vi.fn(async (id: string) => deactivated.find((p) => p.id === id) ?? null),
+      getBySlug: vi.fn().mockResolvedValue(null),
+      create: createMock,
+      update: vi.fn(),
+      delete: vi.fn(),
+    };
+
+    const user = userEvent.setup({ delay: null });
+    const { unmount } = render(
+      <CatalogProvider productRepository={remoteDeactivatedRepo}>
+        <CatalogRegressionProbe />
+      </CatalogProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-loading')).toHaveTextContent('false');
+    });
+    expect(screen.getByTestId('catalog-count')).toHaveTextContent('0');
+    expect(createMock).not.toHaveBeenCalled();
+
+    // Subsequent refreshCatalog after admin deletes everything must also stay 0 and not reseed
+    await user.click(screen.getByRole('button', { name: 'Oppdater katalog' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-count')).toHaveTextContent('0');
+    });
+    expect(createMock).not.toHaveBeenCalled();
+    unmount();
+
+    // Non-admin visitor when all starter products are deactivated (getById throws permission-denied)
+    // must NOT fall back to fake starter products
+    const nonAdminDeactivatedRepo: IProductRepository = {
+      listAll: vi.fn().mockRejectedValue(new Error('permission-denied')),
+      listActive: vi.fn().mockResolvedValue([]),
+      listByCategory: vi.fn().mockResolvedValue([]),
+      getById: vi.fn().mockRejectedValue(
+        Object.assign(new Error('Missing or insufficient permissions.'), {
+          code: 'permission-denied',
+        }),
+      ),
+      getBySlug: vi.fn().mockResolvedValue(null),
+      create: createMock,
+      update: vi.fn(),
+      delete: vi.fn(),
+    };
+
+    render(
+      <CatalogProvider productRepository={nonAdminDeactivatedRepo}>
+        <CatalogRegressionProbe />
+      </CatalogProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-loading')).toHaveTextContent('false');
+    });
+    expect(screen.getByTestId('catalog-count')).toHaveTextContent('0');
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('AdminPage enforces synchronous ref lock on same-tick Deaktiver/Slett double-clicks and supports tablist Arrow/Home/End navigation', async () => {
+    const starter = getStarterProducts();
+    let resolveUpdate!: (p: Product) => void;
+    let resolveDelete!: () => void;
+
+    const updateSpy = vi.fn(
+      () =>
+        new Promise<Product>((resolve) => {
+          resolveUpdate = resolve;
+        }),
+    );
+    const deleteSpy = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve;
+        }),
+    );
+
+    const lockRepo: IProductRepository = {
+      listAll: vi.fn().mockResolvedValue([starter[0], starter[1]]),
+      listActive: vi.fn().mockResolvedValue([starter[0], starter[1]]),
+      listByCategory: vi.fn().mockResolvedValue([]),
+      getById: vi.fn().mockResolvedValue(starter[0]),
+      getBySlug: vi.fn().mockResolvedValue(starter[0]),
+      create: vi.fn(),
+      update: updateSpy,
+      delete: deleteSpy,
+    };
+
+    const adminUser = {
+      uid: 'admin-lock',
+      email: ADMIN_ALLOWLIST_EMAIL,
+      displayName: 'Admin',
+      emailVerified: true,
+      isAnonymous: false,
+    };
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialUser={adminUser} initialIsAdmin={true}>
+          <AdminPage productRepository={lockRepo} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Produkter \(2\)/i })).toBeInTheDocument();
+    });
+
+    // Keyboard navigation on role="tablist"
+    const user = userEvent.setup({ delay: null });
+    const productsTab = screen.getByRole('tab', { name: /Produkter/i });
+    const ordersTab = screen.getByRole('tab', { name: /Bestillinger/i });
+    const messagesTab = screen.getByRole('tab', { name: /Henvendelser/i });
+
+    productsTab.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(ordersTab).toHaveAttribute('aria-selected', 'true');
+    expect(ordersTab).toHaveFocus();
+
+    await user.keyboard('{End}');
+    expect(messagesTab).toHaveAttribute('aria-selected', 'true');
+    expect(messagesTab).toHaveFocus();
+
+    await user.keyboard('{Home}');
+    expect(productsTab).toHaveAttribute('aria-selected', 'true');
+    expect(productsTab).toHaveFocus();
+
+    // Same-tick double-click on Deaktiver and Slett must invoke update/delete only once
+    const desktopList = screen.getByTestId('admin-products-desktop');
+    const row0 = within(desktopList).getByText(starter[0].title).closest('tr')!;
+    const row1 = within(desktopList).getByText(starter[1].title).closest('tr')!;
+
+    const deactivateBtn = within(row0).getByRole('button', { name: 'Deaktiver' });
+    const deleteBtn = within(row1).getByRole('button', { name: 'Slett' });
+    act(() => {
+      deactivateBtn.click();
+      deactivateBtn.click();
+      deleteBtn.click();
+      deleteBtn.click();
+    });
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(deleteSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveUpdate({ ...starter[0], active: false });
+      resolveDelete();
+      await Promise.resolve();
+    });
   });
 });

@@ -451,4 +451,79 @@ describe('Firebase bootstrap & Firestore repositories (M1)', () => {
       }),
     ).rejects.toBeInstanceOf(ValidationError);
   });
+
+  it('FirestoreContactRepository.create and FirestoreOrderRepository.create fail fast when navigator.onLine is false or setDoc stalls', async () => {
+    const productRepo = new FirestoreProductRepository(fakeDb);
+    await productRepo.create({
+      id: 'offline-prod',
+      title: 'Offline Testprodukt',
+      categorySlug: 'seveno-living',
+      description: 'Testprodukt for offline og timeout-verifisering.',
+      priceNok: 500,
+      stock: 5,
+    });
+
+    const contactRepo = new FirestoreContactRepository(fakeDb);
+    const orderRepo = new FirestoreOrderRepository(fakeDb, productRepo);
+
+    const onLineSpy = vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false);
+
+    try {
+      await expect(
+        contactRepo.create({
+          name: 'Ingrid Hansen',
+          email: 'ingrid@example.no',
+          subject: 'Offline test',
+          message: 'Tester at offline innsending ikke henger evig.',
+        }),
+      ).rejects.toThrow(/internettforbindelse/i);
+
+      await expect(
+        orderRepo.create({
+          ownerUid: 'cust-offline',
+          customer: { name: 'Ola Nordmann', email: 'ola@example.no', phone: '91234567' },
+          shippingAddress: { street: 'Storgata 10', postalCode: '0155', city: 'Oslo' },
+          items: [{ productId: 'offline-prod', quantity: 1 }],
+          paymentProvider: 'test_order',
+        }),
+      ).rejects.toThrow(/internettforbindelse/i);
+    } finally {
+      onLineSpy.mockRestore();
+    }
+
+    vi.useFakeTimers();
+    const setDocSpy = vi
+      .spyOn(firestoreMod, 'setDoc')
+      .mockImplementation(() => new Promise<void>(() => undefined));
+
+    try {
+      const contactPromise = contactRepo.create({
+        name: 'Ingrid Hansen',
+        email: 'ingrid@example.no',
+        subject: 'Timeout test',
+        message: 'Tester at hengende setDoc avbrytes etter tidsavbrudd.',
+      });
+      const contactErrorPromise = contactPromise.catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(10_500);
+      const contactErr = await contactErrorPromise;
+      expect(contactErr).toBeInstanceOf(Error);
+      expect((contactErr as Error).message).toMatch(/tok for lang tid/i);
+
+      const orderPromise = orderRepo.create({
+        ownerUid: 'cust-timeout',
+        customer: { name: 'Ola Nordmann', email: 'ola@example.no', phone: '91234567' },
+        shippingAddress: { street: 'Storgata 10', postalCode: '0155', city: 'Oslo' },
+        items: [{ productId: 'offline-prod', quantity: 1 }],
+        paymentProvider: 'test_order',
+      });
+      const orderErrorPromise = orderPromise.catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(10_500);
+      const orderErr = await orderErrorPromise;
+      expect(orderErr).toBeInstanceOf(Error);
+      expect((orderErr as Error).message).toMatch(/tok for lang tid/i);
+    } finally {
+      setDocSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });

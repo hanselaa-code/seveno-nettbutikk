@@ -2,7 +2,7 @@ import { MessageCircle, Send, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useOptionalCart } from '../../context/CartContext';
-import { getSevenoAiService } from '../../services/ai/sevenoAiService';
+import { getSevenoAiService, MAX_AI_MESSAGE_LENGTH } from '../../services/ai/sevenoAiService';
 import type { ChatMessage, ChatTurn, IAiAssistantService } from '../../services/ai/types';
 
 export interface AiAssistantWidgetProps {
@@ -71,7 +71,13 @@ export function AiAssistantWidget({ aiService }: AiAssistantWidgetProps) {
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isCartDrawerOpen) {
+      if (
+        event.key === 'Escape' &&
+        !event.defaultPrevented &&
+        !isCartDrawerOpen &&
+        !document.getElementById('mobile-nav-drawer')
+      ) {
+        event.preventDefault();
         setIsOpen(false);
       }
     };
@@ -136,6 +142,8 @@ export function AiAssistantWidget({ aiService }: AiAssistantWidgetProps) {
       if (!isMountedRef.current) {
         return;
       }
+      setMessages((prev) => prev.filter((msg) => msg.id !== userMessage.id));
+      setInput((prev) => (prev.trim().length > 0 ? prev : trimmed));
       setErrorMessage(
         error instanceof Error && error.message
           ? error.message
@@ -221,7 +229,7 @@ export function AiAssistantWidget({ aiService }: AiAssistantWidgetProps) {
             role="log"
             aria-live="polite"
             aria-label="Samtalehistorikk"
-            className="flex-1 space-y-3 overflow-y-auto bg-ivory/60 p-4"
+            className="flex-1 space-y-3 overflow-y-auto overflow-x-hidden bg-ivory/60 p-4"
           >
             {messages.map((msg) => {
               const isUser = msg.role === 'user';
@@ -230,8 +238,8 @@ export function AiAssistantWidget({ aiService }: AiAssistantWidgetProps) {
                   key={msg.id}
                   className={
                     isUser
-                      ? 'ml-auto max-w-[85%] rounded-lg bg-bronze px-3.5 py-2.5 text-sm text-white'
-                      : 'mr-auto max-w-[85%] whitespace-pre-wrap rounded-lg border border-sand bg-canvas px-3.5 py-2.5 text-sm leading-relaxed text-espresso'
+                      ? 'ml-auto max-w-[85%] wrap-anywhere rounded-lg bg-bronze px-3.5 py-2.5 text-sm text-white'
+                      : 'mr-auto max-w-[85%] whitespace-pre-wrap wrap-anywhere rounded-lg border border-sand bg-canvas px-3.5 py-2.5 text-sm leading-relaxed text-espresso'
                   }
                 >
                   {msg.text}
@@ -286,6 +294,7 @@ export function AiAssistantWidget({ aiService }: AiAssistantWidgetProps) {
               id="seveno-ai-input"
               ref={inputRef}
               type="text"
+              maxLength={MAX_AI_MESSAGE_LENGTH}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Skriv et spørsmål på norsk..."

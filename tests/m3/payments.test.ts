@@ -405,4 +405,95 @@ describe('M3 Payment Provider Adapter Layer', () => {
       expect(() => new PaymentProviderRegistry().getDefault()).toThrow(PaymentProviderError);
     });
   });
+
+  describe('Tier 5 Adversarial Payment Hardening', () => {
+    it('calculateOrderPricing([]) throws PaymentProviderError and nokToOre rejects safe-integer overflow', () => {
+      expect(() => calculateOrderPricing([])).toThrow(PaymentProviderError);
+      expect(() => nokToOre(1e15)).toThrow(PaymentProviderError);
+    });
+
+    it('KlarnaPaymentAdapter.getStatus and VippsPaymentAdapter.getStatus wrap invalid JSON as PaymentProviderError(INVALID_RESPONSE) and Vipps rejects non-https redirectUrl', async () => {
+      const klarnaAdapter = new KlarnaPaymentAdapter({
+        username: 'merchant-user',
+        password: 'merchant-secret-value',
+        fetchImpl: (async () => ({
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new SyntaxError('Unexpected token < in JSON');
+          },
+        })) as unknown as typeof fetch,
+      });
+
+      await expect(klarnaAdapter.getStatus('ORD-123')).rejects.toMatchObject({
+        name: 'PaymentProviderError',
+        providerId: 'klarna',
+        code: 'INVALID_RESPONSE',
+      });
+
+      const vippsBadJsonFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: 'oauth-token-123' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new SyntaxError('Unexpected token < in JSON');
+          },
+        }) as unknown as typeof fetch;
+
+      const vippsAdapter = new VippsPaymentAdapter({
+        clientId: 'c',
+        clientSecret: 's',
+        subscriptionKey: 'k',
+        merchantSerialNumber: '123',
+        fetchImpl: vippsBadJsonFetch,
+      });
+
+      await expect(vippsAdapter.getStatus('VIPPS-123')).rejects.toMatchObject({
+        name: 'PaymentProviderError',
+        providerId: 'vipps',
+        code: 'INVALID_RESPONSE',
+      });
+
+      const vippsUnsafeRedirectFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: 'oauth-token-123' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            reference: 'SEV-2026-XSS1',
+            redirectUrl: 'javascript:alert(1)',
+          }),
+        }) as unknown as typeof fetch;
+
+      const vippsRedirectAdapter = new VippsPaymentAdapter({
+        clientId: 'c',
+        clientSecret: 's',
+        subscriptionKey: 'k',
+        merchantSerialNumber: '123',
+        fetchImpl: vippsUnsafeRedirectFetch,
+      });
+
+      await expect(
+        vippsRedirectAdapter.createSession({
+          orderNumber: 'SEV-2026-XSS1',
+          items: [{ productId: 'army-sekk', title: 'Army sekk', quantity: 1, unitPriceNok: 1890 }],
+        }),
+      ).rejects.toMatchObject({
+        name: 'PaymentProviderError',
+        providerId: 'vipps',
+        code: 'INVALID_RESPONSE',
+      });
+    });
+  });
 });

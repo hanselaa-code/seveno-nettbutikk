@@ -32,7 +32,7 @@ Nettbutikken er delt inn i tre kuraterte hovedkategorier med hvert sitt startpro
 - **Backend & infrastruktur (Firebase)**:
   - **Cloud Firestore** (Standard `(default)` database) for `products`, `orders`, `contact_messages` og `admins`
   - **Firebase Authentication** (`anonymous` gjestesesjoner for utsjekk, `emailPassword` og `googleSignIn` for administrator)
-  - **Firebase AI Logic** (`firebase/ai` med `GoogleAIBackend()`, standardmodell `gemini-3.8-flash` konfigurert via Firebase Remote Config `gemini_model`)
+  - **Firebase AI Logic** (`firebase/ai` med `GoogleAIBackend()`, standardmodell `gemini-3.5-flash-lite` konfigurert via Firebase Remote Config `gemini_model`)
   - **Classic Firebase Hosting** med SPA-omsrkiving (`** -> /index.html`) og runtime-konfigurasjon via `/__/firebase/init.json`
 - **Testing**: Vitest + React Testing Library + Firebase Emulator Suite + isolert Playwright E2E-pakke under `e2e/`
 
@@ -119,7 +119,7 @@ Prosjektet er konfigurert for Spark-plan-prosjektet `spill-2p-math` (`.firebaser
    ```bash
    npx -y firebase-tools@latest deploy --only "firestore:rules,firestore:indexes" --force --project spill-2p-math
    ```
-3. Aktiver Auth-tilbydere (`anonymous`, `emailPassword`, `googleSignIn`), Firebase AI Logic (`gemini-developer-api`) og Remote Config (`gemini_model = "gemini-3.8-flash"`):
+3. Aktiver Auth-tilbydere (`anonymous`, `emailPassword`, `googleSignIn`), Firebase AI Logic (`gemini-developer-api`) og Remote Config (`gemini_model = "gemini-3.5-flash-lite"`):
    ```bash
    npx -y firebase-tools@latest deploy --only auth,remoteconfig --force --project spill-2p-math
    ```

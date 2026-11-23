@@ -23,9 +23,12 @@ import {
   getContactFormFields,
   getLogoLink,
   getMobileMenuButton,
+  getMobileNavDrawer,
   getPaymentOption,
   getProductCardByTitle,
   getProductLinkByTitle,
+  getVisibleAdminProductRows,
+  openAdminTab,
   openCartDrawer,
 } from '../helpers/selectors';
 import {
@@ -91,10 +94,20 @@ test.describe('Tier 2 — Boundary & Corner Cases (F-01 through F-10)', () => {
       const menuBtn = getMobileMenuButton(page);
       await expect(menuBtn).toBeVisible();
 
-      for (let i = 0; i < 5; i += 1) {
+      for (let i = 0; i < 3; i += 1) {
         await menuBtn.click();
+        const drawer = getMobileNavDrawer(page);
+        await expect(drawer).toBeVisible();
+        await drawer.getByRole('button', { name: /lukk meny/i }).first().click();
+        await expect(menuBtn).toHaveAttribute('aria-expanded', 'false');
+        await expect(page.getByRole('dialog', { name: /mobilmeny/i })).toHaveCount(0);
       }
+
+      await menuBtn.click();
+      await expect(getMobileNavDrawer(page)).toBeVisible();
       await page.keyboard.press('Escape');
+      await expect(menuBtn).toHaveAttribute('aria-expanded', 'false');
+      await expect(page.getByRole('dialog', { name: /mobilmeny/i })).toHaveCount(0);
 
       // Storefront logo/main content must remain clickable (no stuck backdrop)
       await expect(getLogoLink(page)).toBeVisible();
@@ -503,6 +516,7 @@ test.describe('Tier 2 — Boundary & Corner Cases (F-01 through F-10)', () => {
       ).toBeVisible({ timeout: 15_000 });
 
       await signInAdmin(page, adminCreds);
+      await openAdminTab(page, /henvendelser/i);
       await expect(page.getByText(xssSubject).first()).toBeVisible({ timeout: 15_000 });
       const xssFlag = await page.evaluate(() => (window as unknown as { __xss?: unknown }).__xss);
       expect(xssFlag).toBeUndefined();
@@ -598,24 +612,42 @@ test.describe('Tier 2 — Boundary & Corner Cases (F-01 through F-10)', () => {
     }, testInfo) => {
       const adminCreds = await requireAdminCredsOrSkip(testInfo);
       await signInAdmin(page, adminCreds);
+      await expect(page.locator('main').getByText(/Laster produkter/i)).toBeHidden({
+        timeout: 15_000,
+      });
+      await expect(
+        getVisibleAdminProductRows(page)
+          .first()
+          .or(page.locator('main').getByText(/Ingen produkter registrert/i)),
+      ).toBeVisible({ timeout: 15_000 });
 
       const form = getAdminProductFormFields(page);
-      const beforeDeleteCount = await page.locator('main').getByRole('button', { name: /slett/i }).count();
+      const beforeCount = await getVisibleAdminProductRows(page).count();
       await form.title.fill('   ');
       await form.price.fill('500');
       await form.stock.fill('-1');
-      await form.description.fill('Ugyldig lager og tittel.');
+      await form.description.fill('Beskrivelse for test av lager og tittel.');
       await form.submit.click();
-
-      const afterDeleteCount = await page.locator('main').getByRole('button', { name: /slett/i }).count();
-      expect(afterDeleteCount).toBe(beforeDeleteCount);
-      await expect(page.locator('main').getByText('Ugyldig lager og tittel.')).toHaveCount(0);
 
       const validationSignal = page
         .locator('main [role="alert"], main [aria-invalid="true"]')
-        .or(page.locator('main').getByText(/ugyldig|påkrevd|må være|kan ikke/i))
         .first();
       await expect(validationSignal).toBeVisible();
+      await expect(form.title).toHaveAttribute('aria-invalid', 'true');
+      await expect(form.stock).toHaveAttribute('aria-invalid', 'true');
+      await expect(page.locator('main [role="status"]')).toHaveCount(0);
+      await expect(getVisibleAdminProductRows(page)).toHaveCount(beforeCount);
+
+      await page.reload();
+      await expect(page.locator('main').getByText(/Laster produkter/i)).toBeHidden({
+        timeout: 15_000,
+      });
+      await expect(
+        getVisibleAdminProductRows(page)
+          .first()
+          .or(page.locator('main').getByText(/Ingen produkter registrert/i)),
+      ).toBeVisible({ timeout: 15_000 });
+      await expect(getVisibleAdminProductRows(page)).toHaveCount(beforeCount);
     });
 
     test('T2-F06-05 Admin product with unreachable image URL falls back cleanly on store', async ({
@@ -630,6 +662,20 @@ test.describe('Tier 2 — Boundary & Corner Cases (F-01 through F-10)', () => {
       try {
         await createProductViaAdmin(page, product);
         await page.goto(`/kategori/${product.categorySlug}`);
+        const card = getProductCardByTitle(page, product.title);
+        await expect(card).toBeVisible({ timeout: 15_000 });
+        const img = card.locator('img').first();
+        await expect(img).toBeVisible();
+        await expect
+          .poll(
+            async () =>
+              img.evaluate((el) => {
+                const i = el as HTMLImageElement;
+                return i.complete && i.naturalWidth > 0;
+              }),
+            { timeout: 10_000 },
+          )
+          .toBe(true);
         await expectHealthyLogoAndImages(page);
       } finally {
         await deleteProductViaAdmin(page, product.title).catch(() => {});
@@ -805,6 +851,8 @@ test.describe('Tier 2 — Boundary & Corner Cases (F-01 through F-10)', () => {
         .click();
 
       await page.goto('/utsjekk');
+      await expect(page.locator('main')).toContainText(/Delsum/i, { timeout: 15_000 });
+      await expect(page.locator('main')).toContainText(/Totalt/i, { timeout: 15_000 });
       const text = await page.locator('main').innerText();
       expect(text).not.toMatch(/\.\d{3,}/);
 
@@ -980,10 +1028,25 @@ test.describe('Tier 2 — Boundary & Corner Cases (F-01 through F-10)', () => {
       const vippsOrder = await submitOrderAndReadConfirmation(page, 'vipps');
 
       expect(klarnaOrder.orderNumber).not.toBe(vippsOrder.orderNumber);
+      expect(klarnaOrder.confirmationText).toMatch(/Klarna/i);
+      expect(vippsOrder.confirmationText).toMatch(/Vipps/i);
 
       await signInAdmin(page, adminCreds);
-      await expect(page.getByText(klarnaOrder.orderNumber).first()).toBeVisible({ timeout: 15_000 });
-      await expect(page.getByText(vippsOrder.orderNumber).first()).toBeVisible({ timeout: 15_000 });
+      await openAdminTab(page, /bestillinger/i);
+      const klarnaCard = page
+        .getByRole('tabpanel')
+        .locator('article, tr, li')
+        .filter({ hasText: klarnaOrder.orderNumber })
+        .first();
+      const vippsCard = page
+        .getByRole('tabpanel')
+        .locator('article, tr, li')
+        .filter({ hasText: vippsOrder.orderNumber })
+        .first();
+      await expect(klarnaCard).toBeVisible({ timeout: 15_000 });
+      await expect(klarnaCard).toContainText(/klarna/i);
+      await expect(vippsCard).toBeVisible({ timeout: 15_000 });
+      await expect(vippsCard).toContainText(/vipps/i);
     });
 
     test('T2-F09-04 Klarna/Vipps order confirmation preserves exact 25% MVA & NOK totals', async ({

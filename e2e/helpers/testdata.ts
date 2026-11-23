@@ -11,6 +11,7 @@ import {
   getPaymentOption,
   getProductCardByTitle,
   getProductLinkByTitle,
+  getVisibleAdminProductRows,
   type PaymentProviderChoice,
 } from './selectors';
 
@@ -126,29 +127,57 @@ export async function ensureEmulatorAdmin(creds: AdminCredentials): Promise<void
     `${authUrl}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer owner',
+      },
       body: JSON.stringify({
         email: creds.email,
         password: creds.password,
+        emailVerified: true,
         returnSecureToken: true,
       }),
     },
   );
+
+  let localId: string | undefined;
   if (signUpRes.ok) {
-    const body = (await signUpRes.json()) as { idToken?: string; localId?: string };
-    if (body.idToken) {
-      await fetch(
-        `${authUrl}/identitytoolkit.googleapis.com/v1/accounts:update?key=fake-api-key`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            idToken: body.idToken,
-            emailVerified: true,
-          }),
-        },
-      );
+    const body = (await signUpRes.json()) as { localId?: string };
+    localId = body.localId;
+  } else {
+    const signInRes = await fetch(
+      `${authUrl}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: creds.email,
+          password: creds.password,
+          returnSecureToken: true,
+        }),
+      },
+    );
+    if (signInRes.ok) {
+      const body = (await signInRes.json()) as { localId?: string };
+      localId = body.localId;
     }
+  }
+
+  if (localId) {
+    await fetch(
+      `${authUrl}/identitytoolkit.googleapis.com/v1/accounts:update?key=fake-api-key`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer owner',
+        },
+        body: JSON.stringify({
+          localId,
+          emailVerified: true,
+        }),
+      },
+    );
   }
 }
 
@@ -231,7 +260,9 @@ export async function createProductViaAdmin(
 
   await form.submit.click();
 
-  await expect(page.getByText(product.title).first()).toBeVisible({ timeout: 15_000 });
+  await expect(getVisibleAdminProductRows(page, product.title).first()).toBeVisible({
+    timeout: 15_000,
+  });
 }
 
 export async function deleteProductViaAdmin(page: Page, title: string): Promise<void> {
@@ -244,16 +275,15 @@ export async function deleteProductViaAdmin(page: Page, title: string): Promise<
   await page
     .locator('main')
     .getByRole('button', { name: /slett|rediger/i })
+    .locator('visible=true')
     .first()
     .or(page.locator('main').getByText(/ingen produkter/i).first())
     .waitFor({ state: 'visible', timeout: 15_000 })
     .catch(() => {});
 
-  const productRow = page
-    .locator('tr, li, article, div')
-    .filter({ hasText: title })
+  const productRow = getVisibleAdminProductRows(page, title)
     .filter({ has: page.getByRole('button', { name: /slett/i }) })
-    .last();
+    .first();
 
   if ((await productRow.count()) === 0) return;
 
@@ -269,7 +299,11 @@ export async function deleteProductViaAdmin(page: Page, title: string): Promise<
     await confirmBtn.click();
   }
 
-  await expect(page.getByText(title)).toHaveCount(0, { timeout: 15_000 });
+  const remainingRows = page
+    .locator('main tr, main li, main article')
+    .filter({ hasText: title })
+    .filter({ has: page.getByRole('button', { name: /slett|rediger/i }) });
+  await expect(remainingRows).toHaveCount(0, { timeout: 15_000 });
 }
 
 export async function addProductToCartFromCatalog(
@@ -331,6 +365,54 @@ export async function applyAiAppCheckDebugToken(page: Page): Promise<void> {
   }, appCheckDebugToken);
 }
 
+interface AiPanelSnapshot {
+  alertText: string;
+  isLoading: boolean;
+  logMessages: string[];
+  panelText: string;
+}
+
+async function readAiPanelSnapshot(panel: ReturnType<typeof getAiPanel>): Promise<AiPanelSnapshot> {
+  return panel.evaluate((panelEl) => {
+    const isElementVisible = (el: Element | null): el is HTMLElement => {
+      if (!el || !(el instanceof HTMLElement)) return false;
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      return el.getClientRects().length > 0;
+    };
+
+    const alertEl = panelEl.querySelector('[role="alert"]');
+    const alertText = isElementVisible(alertEl)
+      ? (alertEl.innerText || alertEl.textContent || '').trim()
+      : '';
+
+    const statusEl = panelEl.querySelector('[role="status"]');
+    const isLoading = isElementVisible(statusEl);
+
+    const logEl = panelEl.querySelector('[role="log"]');
+    const logMessages: string[] = [];
+    if (logEl) {
+      for (const child of Array.from(logEl.children)) {
+        const role = child.getAttribute('role');
+        if (role === 'status' || role === 'alert') continue;
+        if (child.tagName === 'BUTTON' || child.querySelector('button')) continue;
+        if (child.querySelector('[role="status"], [role="alert"]')) continue;
+        const text = (
+          (child instanceof HTMLElement ? child.innerText : child.textContent) || ''
+        ).trim();
+        if (!text) continue;
+        logMessages.push(text);
+      }
+    }
+
+    const panelText = (
+      (panelEl instanceof HTMLElement ? panelEl.innerText : panelEl.textContent) || ''
+    ).trim();
+
+    return { alertText, isLoading, logMessages, panelText };
+  });
+}
+
 export async function askAiAssistant(
   page: Page,
   prompt: string,
@@ -347,35 +429,82 @@ export async function askAiAssistant(
 
   const input = getAiInput(panel);
   await expect(input).toBeVisible();
-  const panelTextBefore = (await panel.innerText()).trim();
+  const beforeSnapshot = await readAiPanelSnapshot(panel);
+  const panelTextBefore = beforeSnapshot.panelText;
 
   await input.fill(prompt);
   const sendBtn = getAiSendButton(panel);
   await expect(sendBtn).toBeEnabled();
   await sendBtn.click();
 
-  // Wait for prompt echo and a substantial assistant response beyond loading/thinking state
+  // Atomically inspect [role="alert"], [role="status"], and [role="log"] message bubbles
+  let alertError: string | null = null;
+  let settledSnapshot: AiPanelSnapshot | null = null;
+  let settledReply = '';
+  const trimmedPrompt = prompt.trim();
+
   await expect
     .poll(
       async () => {
-        const current = (await panel.innerText()).trim();
-        if (current.length <= panelTextBefore.length + prompt.length + 10) return false;
-        const tail = current.slice(panelTextBefore.length);
-        if (/skriver|tenker|laster|sender\.\.\./i.test(tail) && tail.length < prompt.length + 35) {
-          return false;
+        alertError = null;
+        settledSnapshot = null;
+        settledReply = '';
+
+        const snapshot = await readAiPanelSnapshot(panel);
+        if (snapshot.alertText) {
+          alertError = snapshot.alertText;
+          return 'done';
         }
-        return true;
+        if (snapshot.isLoading) {
+          return 'waiting';
+        }
+
+        const newMessages = snapshot.logMessages.slice(beforeSnapshot.logMessages.length);
+        if (newMessages.length < 2) {
+          return 'waiting';
+        }
+
+        const userIdx = newMessages.findIndex(
+          (msg) =>
+            msg === trimmedPrompt || (trimmedPrompt.length > 0 && msg.includes(trimmedPrompt)),
+        );
+        const assistantReplies = (
+          userIdx >= 0 ? newMessages.slice(userIdx + 1) : newMessages.slice(1)
+        )
+          .map((m) => m.trim())
+          .filter(Boolean);
+
+        if (assistantReplies.length === 0) {
+          return 'waiting';
+        }
+
+        const replyText = assistantReplies.join('\n').trim();
+        if (!replyText || /^(?:skriver|tenker|laster|sender)\.{0,3}$/i.test(replyText)) {
+          return 'waiting';
+        }
+
+        settledSnapshot = snapshot;
+        settledReply = replyText;
+        return 'done';
       },
       {
         timeout: policy.responseTimeoutMs,
         message: `Timed out waiting for AI assistant response to "${prompt}"`,
       },
     )
-    .toBe(true);
+    .toBe('done');
 
-  const panelTextAfter = (await panel.innerText()).trim();
-  const replyDelta = panelTextAfter.slice(panelTextBefore.length).trim();
-  return { panelTextBefore, panelTextAfter, replyDelta };
+  expect(
+    alertError,
+    `AI assistant rendered an error alert for "${prompt}": ${alertError ?? ''}`,
+  ).toBeNull();
+
+  const panelTextAfter = (settledSnapshot as AiPanelSnapshot | null)?.panelText ?? panelTextBefore;
+  return {
+    panelTextBefore,
+    panelTextAfter,
+    replyDelta: settledReply,
+  };
 }
 
 

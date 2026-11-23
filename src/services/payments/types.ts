@@ -156,7 +156,15 @@ export function nokToOre(nok: number): number {
       'Beløp i NOK må være et ikke-negativt, endelig tall.',
     );
   }
-  return Math.round(nok * 100 + 1e-9) || 0;
+  const ore = Math.round(nok * 100 + 1e-9) || 0;
+  if (!Number.isSafeInteger(ore)) {
+    throw new PaymentProviderError(
+      'validation',
+      'INVALID_AMOUNT',
+      'Beløp i øre overskrider trygg heltallsgrense.',
+    );
+  }
+  return ore;
 }
 
 export function calculateOrderPricing(
@@ -167,6 +175,13 @@ export function calculateOrderPricing(
   if (typeof itemsOrSubtotal === 'number') {
     subtotalOre = nokToOre(itemsOrSubtotal);
   } else {
+    if (!Array.isArray(itemsOrSubtotal) || itemsOrSubtotal.length === 0) {
+      throw new PaymentProviderError(
+        'validation',
+        'INVALID_SESSION_INPUT',
+        'Prisberegning krever minst én varelinje.',
+      );
+    }
     for (const item of itemsOrSubtotal) {
       if (!Number.isInteger(item.quantity) || item.quantity < 1) {
         throw new PaymentProviderError(
@@ -187,6 +202,13 @@ export function calculateOrderPricing(
         );
       }
       subtotalOre += nokToOre(item.unitPriceNok) * item.quantity;
+      if (!Number.isSafeInteger(subtotalOre)) {
+        throw new PaymentProviderError(
+          'validation',
+          'INVALID_AMOUNT',
+          'Totalbeløp i øre overskrider trygg heltallsgrense.',
+        );
+      }
     }
   }
 

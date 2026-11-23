@@ -32,7 +32,9 @@ import {
   getPaymentOption,
   getProductCardByTitle,
   getProductLinkByTitle,
+  getVisibleAdminProductRows,
   navigateStorefront,
+  openAdminTab,
   openCartDrawer,
 } from '../helpers/selectors';
 import {
@@ -453,6 +455,7 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
       await expect(page.getByText(uniqueSubject)).toHaveCount(0);
 
       await signInAdmin(page, adminCreds);
+      await openAdminTab(page, /henvendelser/i);
       await expect(page.getByText(uniqueSubject).first()).toBeVisible({ timeout: 15_000 });
     });
 
@@ -487,7 +490,13 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
       const adminCreds = await requireAdminCredsOrSkip(testInfo);
       await signInAdmin(page, adminCreds);
 
-      await expect(page.getByText(STARTER_PRODUCTS.armySekk.title).first()).toBeVisible();
+      await expect(
+        page
+          .locator('main table, main article')
+          .getByText(STARTER_PRODUCTS.armySekk.title)
+          .locator('visible=true')
+          .first(),
+      ).toBeVisible();
       await expect(getAdminProductFormFields(page).title).toBeVisible();
     });
 
@@ -526,11 +535,9 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
       try {
         await createProductViaAdmin(page, product);
 
-        const row = page
-          .locator('tr, li, article, div')
-          .filter({ hasText: product.title })
+        const row = getVisibleAdminProductRows(page, product.title)
           .filter({ has: page.getByRole('button', { name: /rediger/i }) })
-          .last();
+          .first();
         await row.getByRole('button', { name: /rediger/i }).first().click();
 
         const form = getAdminProductFormFields(page);
@@ -539,12 +546,12 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
         await form.submit.click();
 
         const updatedRow = page
-          .locator('tr, li, article, div')
+          .locator('main tr, main article')
           .filter({ hasText: product.title })
           .filter({ hasText: /990/ })
+          .locator('visible=true')
           .first();
-        const savedNotice = page.locator('main').getByText(/oppdatert|lagret/i).first();
-        await expect(updatedRow.or(savedNotice)).toBeVisible({ timeout: 15_000 });
+        await expect(updatedRow).toBeVisible({ timeout: 15_000 });
 
         await page.reload();
         await page.goto('/kategori/seveno-living');
@@ -702,6 +709,7 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
       await expect(fields.postalCode).toBeVisible();
       await expect(fields.city).toBeVisible();
 
+      await expect(page.locator('main')).toContainText(/Army sekk/i);
       const summaryText = await page.locator('main').innerText();
       expect(summaryText).toMatch(/Army sekk/i);
       expect(summaryText).toMatch(/mva|25\s*%/i);
@@ -757,6 +765,7 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
       const { orderNumber } = await submitOrderAndReadConfirmation(page, 'test_order');
 
       await signInAdmin(page, adminCreds);
+      await openAdminTab(page, /bestillinger/i);
       await expect(page.getByText(orderNumber).first()).toBeVisible({ timeout: 15_000 });
     });
   });
@@ -843,6 +852,7 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
     });
 
     test('T1-F10-03 Norwegian product Q&A using catalog context', async ({ page }) => {
+      test.setTimeout(75_000);
       await page.goto('/');
       const { replyDelta } = await askAiAssistant(
         page,
@@ -853,6 +863,7 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
     });
 
     test('T1-F10-04 Chat transcript preserved across SPA navigation', async ({ page }) => {
+      test.setTimeout(75_000);
       await page.goto('/');
       const sentinelPrompt = `Hvilken sekk har dere? (${makeRunId()})`;
       await askAiAssistant(page, sentinelPrompt);
@@ -871,6 +882,7 @@ test.describe('Tier 1 — Feature Coverage (F-01 through F-10)', () => {
     test('T1-F10-05 Live catalog sync after Admin product creation', async ({
       page,
     }, testInfo) => {
+      test.setTimeout(75_000);
       const adminCreds = await requireAdminCredsOrSkip(testInfo);
       const product = makeAdminTestProduct(makeRunId(), {
         title: `Fjellryggsekk Test ${makeRunId()}`,

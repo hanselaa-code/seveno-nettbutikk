@@ -4,6 +4,7 @@ export type { ChatMessage, ChatRole, ChatTurn };
 
 export type AiServiceErrorCode =
   | 'EMPTY_MESSAGE'
+  | 'INVALID_MESSAGE'
   | 'AI_NOT_CONFIGURED'
   | 'CATALOG_FETCH_FAILED'
   | 'AI_REQUEST_FAILED'

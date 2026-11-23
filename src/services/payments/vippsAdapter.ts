@@ -366,10 +366,30 @@ export class VippsPaymentAdapter implements IPaymentProvider {
       typeof data.reference === 'string' && data.reference.trim()
         ? data.reference.trim()
         : payload.reference;
-    const redirectUrl =
-      typeof data.redirectUrl === 'string' && data.redirectUrl.trim()
-        ? data.redirectUrl.trim()
-        : undefined;
+    let redirectUrl: string | undefined;
+    if (typeof data.redirectUrl === 'string' && data.redirectUrl.trim()) {
+      const candidate = data.redirectUrl.trim();
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(candidate);
+      } catch (error) {
+        throw new PaymentProviderError(
+          this.id,
+          'INVALID_RESPONSE',
+          'Vipps returnerte en ugyldig redirectUrl.',
+          { retryable: false, cause: error },
+        );
+      }
+      if (parsedUrl.protocol !== 'https:') {
+        throw new PaymentProviderError(
+          this.id,
+          'INVALID_RESPONSE',
+          'Vipps redirectUrl må bruke https://.',
+          { retryable: false },
+        );
+      }
+      redirectUrl = candidate;
+    }
     const nowIso = new Date().toISOString();
 
     const record: VippsSessionRecord = {
@@ -545,10 +565,23 @@ export class VippsPaymentAdapter implements IPaymentProvider {
       );
     }
 
-    const data = (await response.json()) as {
+    let data: {
       state?: unknown;
       amount?: { value?: unknown };
     };
+    try {
+      data = (await response.json()) as {
+        state?: unknown;
+        amount?: { value?: unknown };
+      };
+    } catch (error) {
+      throw new PaymentProviderError(
+        this.id,
+        'INVALID_RESPONSE',
+        'Ugyldig JSON-svar fra Vipps ved statusoppslag.',
+        { retryable: false, cause: error },
+      );
+    }
     const amountOre =
       typeof data.amount?.value === 'number'
         ? data.amount.value

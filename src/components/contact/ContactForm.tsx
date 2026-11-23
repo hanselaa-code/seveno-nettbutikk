@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { ValidationError, validateContactMessageInput } from '../../lib/validators';
 import { getContactRepository } from '../../repositories/contactRepository';
 import type { IContactRepository } from '../../repositories/contactRepository';
+import { FirestoreNetworkError } from '../../repositories/firestoreUtils';
 import type { ContactMessage, CreateContactMessageInput } from '../../types/domain';
 
 export interface ContactFormProps {
@@ -72,6 +73,8 @@ export function ContactForm({ contactRepo, onSubmitMessage }: ContactFormProps) 
     } catch (error) {
       if (error instanceof ValidationError) {
         setFieldErrors(error.errors);
+      } else if (error instanceof FirestoreNetworkError) {
+        setSubmitError(error.message);
       } else {
         setSubmitError(
           'Vi klarte ikke å sende henvendelsen akkurat nå. Vennligst prøv igjen om litt.',

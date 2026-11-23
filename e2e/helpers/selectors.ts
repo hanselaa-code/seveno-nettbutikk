@@ -30,8 +30,8 @@ export function getMobileNavDrawer(page: Page, linkRegex?: RegExp): Locator {
   const nonAiDialog = page
     .getByRole('dialog')
     .filter({ hasNot: page.locator('textarea, input[type="text"]') });
-  const nonFooterNav = page.locator('header nav, nav:not(footer nav)');
-  const base = nonAiDialog.or(nonFooterNav);
+  const headerNav = page.locator('header nav');
+  const base = nonAiDialog.or(headerNav);
   const filtered = linkRegex
     ? base.filter({ has: page.getByRole('link', { name: linkRegex }) })
     : base;
@@ -58,7 +58,12 @@ export async function closeMobileMenuIfOpen(page: Page): Promise<void> {
   if ((await btn.count()) > 0 && (await btn.isVisible())) {
     const expanded = await btn.getAttribute('aria-expanded');
     if (expanded === 'true') {
-      await btn.click();
+      const closeBtn = getMobileNavDrawer(page).getByRole('button', { name: /lukk meny/i }).first();
+      if ((await closeBtn.count()) > 0 && (await closeBtn.isVisible().catch(() => false))) {
+        await closeBtn.click();
+      } else {
+        await page.keyboard.press('Escape');
+      }
     }
   }
 }
@@ -101,10 +106,14 @@ export function getProductCardByTitle(page: Page, title: string | RegExp): Locat
     .locator('main a[href^="/produkt/"]')
     .filter({ hasText: title })
     .first();
-  return headingOrLink
-    .locator('xpath=ancestor::*[self::article or self::li or (self::div and .//button)][1]')
-    .or(headingOrLink)
-    .first();
+  const semanticCard = headingOrLink.locator('xpath=ancestor::*[self::article or self::li][1]');
+  const divCardWithImgAndBtn = headingOrLink.locator(
+    'xpath=ancestor::div[.//button and .//img and not(descendant::article or descendant::li) and not(ancestor::article or ancestor::li)][1]',
+  );
+  const divCardWithBtn = headingOrLink.locator(
+    'xpath=ancestor::div[.//button and not(.//img) and not(descendant::article or descendant::li) and not(ancestor::article or ancestor::li)][1]',
+  );
+  return semanticCard.or(divCardWithImgAndBtn).or(divCardWithBtn).or(headingOrLink).first();
 }
 
 export function getAllProductLinks(page: Page): Locator {
@@ -164,7 +173,7 @@ export function getCheckoutFormFields(page: Page) {
     name: fieldControl(main, /fullt navn|^navn/i, /navn/i),
     email: fieldControl(main, /e-?post/i, /e-?post/i),
     phone: fieldControl(main, /telefon|mobil/i, /telefon|mobil|\+47/i),
-    street: fieldControl(main, /gateadresse|adresse/i, /adresse|storgata/i),
+    street: fieldControl(main, /^gateadresse$/i, /storgata/i),
     postalCode: fieldControl(main, /postnummer|postnr/i, /postnummer|0150/i),
     city: fieldControl(main, /poststed|sted|by/i, /poststed|oslo/i),
     submit: main
@@ -211,6 +220,27 @@ export function getAdminLoginFields(page: Page) {
     password: fieldControl(main, /passord/i, /passord/i),
     submit: main.getByRole('button', { name: /^(?!.*google).*logg inn/i }).first(),
   };
+}
+
+export async function openAdminTab(page: Page, tabRegex: RegExp): Promise<void> {
+  const tab = page.getByRole('tab', { name: tabRegex }).first();
+  await expect(tab).toBeVisible({ timeout: 15_000 });
+  const selected = await tab.getAttribute('aria-selected');
+  if (selected !== 'true') {
+    await tab.click();
+  }
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
+}
+
+export function getVisibleAdminProductRows(page: Page, title?: string | RegExp): Locator {
+  let rows = page
+    .locator('main tr, main li, main article')
+    .filter({ has: page.getByRole('button', { name: /rediger|slett/i }) })
+    .locator('visible=true');
+  if (title !== undefined) {
+    rows = rows.filter({ hasText: title });
+  }
+  return rows;
 }
 
 export function getAdminProductFormFields(page: Page) {

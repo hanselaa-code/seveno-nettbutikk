@@ -3,8 +3,10 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/App';
+import { AiAssistantWidget } from '../../src/components/ai/AiAssistantWidget';
 import { Footer } from '../../src/components/layout/Footer';
 import { Header } from '../../src/components/layout/Header';
+import type { IAiAssistantService } from '../../src/services/ai/types';
 
 describe('Layout, Header, Footer & SPA Routing (M2)', () => {
   it('renders Header with Seveno logo (object-cover object-center), desktop nav links, and cart badge', () => {
@@ -22,6 +24,10 @@ describe('Layout, Header, Footer & SPA Routing (M2)', () => {
 
     const nav = screen.getByRole('navigation', { name: 'Hovedmeny' });
     expect(within(nav).getByRole('link', { name: 'Hjem' })).toHaveAttribute('href', '/');
+    expect(within(nav).getByRole('link', { name: 'Alle' })).toHaveAttribute(
+      'href',
+      '/kategori/alle',
+    );
     expect(within(nav).getByRole('link', { name: 'Seveno living' })).toHaveAttribute(
       'href',
       '/kategori/seveno-living',
@@ -171,5 +177,36 @@ describe('Layout, Header, Footer & SPA Routing (M2)', () => {
       screen.getByRole('heading', { name: '404 — Fant ikke siden', level: 1 }),
     ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Tilbake til forsiden' })).toHaveAttribute('href', '/');
+  });
+
+  it('closes only Header mobile menu on first Escape and keeps AiAssistantWidget open until second Escape', async () => {
+    const user = userEvent.setup();
+    const mockAiService: IAiAssistantService = {
+      isConfigured: () => true,
+      sendMessage: vi.fn(),
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Header />
+        <AiAssistantWidget aiService={mockAiService} />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Spør Seveno AI' }));
+    expect(screen.getByRole('dialog', { name: 'Seveno AI-hjelpebot' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Åpne meny' }));
+    expect(screen.getByRole('dialog', { name: 'Mobilmeny' })).toBeInTheDocument();
+
+    // First Escape closes only Mobilmeny
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Mobilmeny' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Seveno AI-hjelpebot' })).toBeInTheDocument();
+
+    // Second Escape closes Seveno AI-hjelpebot
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Seveno AI-hjelpebot' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Spør Seveno AI' })).toHaveFocus();
   });
 });

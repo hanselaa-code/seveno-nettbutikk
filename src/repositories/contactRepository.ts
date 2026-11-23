@@ -15,6 +15,7 @@ import type {
   ContactMessageStatus,
   CreateContactMessageInput,
 } from '../types/domain';
+import { runFirestoreWriteWithTimeout } from './firestoreUtils';
 
 export interface IContactRepository {
   create(input: CreateContactMessageInput): Promise<ContactMessage>;
@@ -69,14 +70,16 @@ export class FirestoreContactRepository implements IContactRepository {
     const docRef = doc(collection(this.db, 'contact_messages'));
 
     // Never call getDoc() readback here — contact_messages read is admin-only.
-    await setDoc(docRef, {
-      name: validated.name,
-      email: validated.email,
-      subject: validated.subject,
-      message: validated.message,
-      status: 'new',
-      createdAt: serverTimestamp(),
-    });
+    await runFirestoreWriteWithTimeout(() =>
+      setDoc(docRef, {
+        name: validated.name,
+        email: validated.email,
+        subject: validated.subject,
+        message: validated.message,
+        status: 'new',
+        createdAt: serverTimestamp(),
+      }),
+    );
 
     return {
       id: docRef.id,

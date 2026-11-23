@@ -74,30 +74,57 @@ export async function expectHealthyLogoAndImages(page: Page): Promise<void> {
 
   const logoImg = header.locator('img').first();
   await expect(logoImg).toBeVisible();
-  const logoHealthy = await logoImg.evaluate((el) => {
-    const img = el as HTMLImageElement;
-    return img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
-  });
-  expect(logoHealthy, 'Header Seveno logo image must load with naturalWidth > 0').toBe(true);
+  await expect
+    .poll(
+      async () =>
+        logoImg.evaluate((el) => {
+          const img = el as HTMLImageElement;
+          return img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
+        }),
+      { message: 'Header Seveno logo image must load with naturalWidth > 0' },
+    )
+    .toBe(true);
 
-  const imageReport = await page.evaluate(() => {
-    const imgs = Array.from(document.querySelectorAll('img'));
-    return imgs
-      .filter((img) => {
-        const rect = img.getBoundingClientRect();
-        const style = getComputedStyle(img);
-        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0;
-      })
-      .map((img) => ({
-        src: img.currentSrc || img.getAttribute('src') || '',
-        alt: img.alt,
-        complete: img.complete,
-        naturalWidth: img.naturalWidth,
-      }));
-  });
+  let lastImageReport: Array<{
+    src: string;
+    alt: string;
+    complete: boolean;
+    naturalWidth: number;
+  }> = [];
 
-  expect(imageReport.length, 'At least one visible image (logo) should exist').toBeGreaterThan(0);
-  for (const img of imageReport) {
+  await expect
+    .poll(
+      async () => {
+        lastImageReport = await page.evaluate(() => {
+          const imgs = Array.from(document.querySelectorAll('img'));
+          return imgs
+            .filter((img) => {
+              const rect = img.getBoundingClientRect();
+              const style = getComputedStyle(img);
+              return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0;
+            })
+            .map((img) => ({
+              src: img.currentSrc || img.getAttribute('src') || '',
+              alt: img.alt,
+              complete: img.complete,
+              naturalWidth: img.naturalWidth,
+            }));
+        });
+        return (
+          lastImageReport.length > 0 &&
+          lastImageReport.every((img) => img.complete && img.naturalWidth > 0)
+        );
+      },
+      {
+        message: 'All visible images must finish loading with naturalWidth > 0',
+      },
+    )
+    .toBe(true);
+
+  expect(lastImageReport.length, 'At least one visible image (logo) should exist').toBeGreaterThan(
+    0,
+  );
+  for (const img of lastImageReport) {
     expect(
       img.complete && img.naturalWidth > 0,
       `Broken visible image detected: src=${img.src} alt=${img.alt}`,
@@ -106,16 +133,58 @@ export async function expectHealthyLogoAndImages(page: Page): Promise<void> {
 }
 
 export async function expectNoHorizontalOverflow(page: Page): Promise<void> {
-  const overflow = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-    innerWidth: window.innerWidth,
-  }));
+  const overflow = await page.evaluate(() => {
+    const header = document.querySelector('header');
+    const headerOverflow = header
+      ? {
+          scrollWidth: header.scrollWidth,
+          clientWidth: header.clientWidth,
+        }
+      : null;
+
+    const clippedHeaderControls = header
+      ? Array.from(header.querySelectorAll('a, button'))
+          .filter((el) => {
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0;
+          })
+          .map((el) => {
+            const rect = el.getBoundingClientRect();
+            return {
+              label: (el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 40),
+              left: rect.left,
+              right: rect.right,
+            };
+          })
+          .filter((item) => item.left < -1 || item.right > window.innerWidth + 1)
+      : [];
+
+    return {
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      innerWidth: window.innerWidth,
+      headerOverflow,
+      clippedHeaderControls,
+    };
+  });
 
   expect(
     overflow.scrollWidth,
     `Horizontal overflow: scrollWidth=${overflow.scrollWidth} > clientWidth=${overflow.clientWidth}`,
   ).toBeLessThanOrEqual(overflow.clientWidth + 1);
+
+  if (overflow.headerOverflow) {
+    expect(
+      overflow.headerOverflow.scrollWidth,
+      `Header horizontal overflow: scrollWidth=${overflow.headerOverflow.scrollWidth} > clientWidth=${overflow.headerOverflow.clientWidth}`,
+    ).toBeLessThanOrEqual(overflow.headerOverflow.clientWidth + 1);
+  }
+
+  expect(
+    overflow.clippedHeaderControls,
+    `Visible header controls clipped outside viewport (0..${overflow.innerWidth}): ${JSON.stringify(overflow.clippedHeaderControls)}`,
+  ).toEqual([]);
 }
 
 interface RgbaColor {
@@ -320,7 +389,13 @@ export function extractOrderSummaryNumbers(text: string): OrderSummaryNumbers {
   const shippingTokenPattern = /\bgratis\b|\d[\d\s\u00a0\u202f.]*(?:,\d{1,2}|,-)?\s*kr/;
 
   const subtotalToken = findLineMatch(/\b(?:delsum|subtotal)\b/i, amountPattern);
-  const shippingToken = findLineMatch(/\bfrakt\b/i, shippingTokenPattern);
+  const shippingToken =
+    findLineMatch(/^\s*frakt(?:\s*:|\s|$|\t)/i, shippingTokenPattern) ??
+    findLineMatch(
+      /\bfrakt\b/i,
+      shippingTokenPattern,
+      /\bhandle\s+for\b|mer\s+for\s+gratis\s+frakt|\bgratis\s+frakt\b.*(?:over|fra|ved)\b|^\s*gratis\s+frakt\s*$/i,
+    );
   const mvaToken = findLineMatch(/(?:herav\s+)?\b(?:mva|merverdiavgift)\b/i, amountPattern);
   const totalToken = findLineMatch(
     /\b(?:totalt|totalpris|sum\s*å\s*betale|å\s*betale|total)\b/i,
@@ -378,13 +453,13 @@ export function expectOrderMathConsistent(totals: {
 export function expectNoLeakedSecrets(payloads: Array<{ source: string; content: string }>): void {
   const forbiddenPatterns: Array<{ name: string; regex: RegExp }> = [
     { name: 'Private Key PEM', regex: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/ },
-    { name: 'Klarna API Secret', regex: /KLARNA_API_PASSWORD\s*[:=]\s*["'][^"']{6,}["']/i },
-    { name: 'Vipps Client Secret', regex: /VIPPS_CLIENT_SECRET\s*[:=]\s*["'][^"']{6,}["']/i },
+    { name: 'Klarna API Secret', regex: /KLARNA_API_PASSWORD\s*[:=]\s*["'`][^"'`]{6,}["'`]/i },
+    { name: 'Vipps Client Secret', regex: /VIPPS_CLIENT_SECRET\s*[:=]\s*["'`][^"'`]{6,}["'`]/i },
     {
       name: 'Vipps Subscription Key',
-      regex: /["']?Ocp-Apim-Subscription-Key["']?\s*(?:\]\s*)?[:=]\s*["'][A-Za-z0-9_-]{12,}["']/i,
+      regex: /["'`]?Ocp-Apim-Subscription-Key["'`]?\s*(?:\]\s*)?[:=]\s*["'`][A-Za-z0-9_-]{12,}["'`]/i,
     },
-    { name: 'Hardcoded Gemini Key Env', regex: /GEMINI_API_KEY\s*[:=]\s*["']AIza[0-9A-Za-z_-]{20,}["']/i },
+    { name: 'Hardcoded Gemini Key Env', regex: /GEMINI_API_KEY\s*[:=]\s*["'`]AIza[0-9A-Za-z_-]{20,}["'`]/i },
     { name: 'Stripe/OpenAI style live key', regex: /\bsk[-_](?:live|proj)-[A-Za-z0-9_-]{16,}\b/ },
   ];
 
@@ -401,16 +476,16 @@ export function expectNoLeakedSecrets(payloads: Array<{ source: string; content:
     for (const m of aizaMatches) {
       const idx = m.index ?? 0;
       const immediatePrefix = item.content.slice(Math.max(0, idx - 40), idx);
-      const isGeminiAssignment = /(?:gemini[a-z0-9_]*|GEMINI_API_KEY)\s*(?:\]\s*)?[:=]\s*["']?$/i.test(
+      const isGeminiAssignment = /(?:gemini[a-z0-9_]*|GEMINI_API_KEY)\s*(?:\]\s*)?[:=]\s*["'`]?$/i.test(
         immediatePrefix,
       );
       const localWindow = item.content.slice(Math.max(0, idx - 25), idx + 10);
       const configWindow = item.content.slice(Math.max(0, idx - 200), idx + 80);
       const isFirebaseWebConfig =
         !isGeminiAssignment &&
-        (/(?:["']?apiKey["']?\s*[:=]\s*["']AIza)/i.test(localWindow) ||
+        (/(?:["'`]?apiKey["'`]?\s*[:=]\s*["'`]AIza)/i.test(localWindow) ||
           (/firebaseConfig[\s\S]{0,200}apiKey/i.test(configWindow) &&
-            /["']?apiKey["']?\s*[:=]\s*["']?$/i.test(immediatePrefix)));
+            /["'`]?apiKey["'`]?\s*[:=]\s*["'`]?$/i.test(immediatePrefix)));
       expect(
         isFirebaseWebConfig,
         `Non-Firebase Google API key (AIza...) detected outside firebaseConfig in ${item.source}`,

@@ -479,7 +479,17 @@ export class KlarnaPaymentAdapter implements IPaymentProvider {
       );
     }
 
-    const data = (await response.json()) as { status?: unknown; order_amount?: unknown };
+    let data: { status?: unknown; order_amount?: unknown };
+    try {
+      data = (await response.json()) as { status?: unknown; order_amount?: unknown };
+    } catch (error) {
+      throw new PaymentProviderError(
+        this.id,
+        'INVALID_RESPONSE',
+        'Ugyldig JSON-svar fra Klarna ved statusoppslag.',
+        { retryable: false, cause: error },
+      );
+    }
     return {
       providerId: this.id,
       mode: 'live',

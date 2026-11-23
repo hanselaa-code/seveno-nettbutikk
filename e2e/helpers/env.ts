@@ -159,7 +159,7 @@ export function getAiPolicy(): AiPolicy {
   const timeoutRaw = Number(process.env.E2E_AI_TIMEOUT_MS);
   return {
     required: process.env.E2E_AI_REQUIRED !== '0',
-    responseTimeoutMs: Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : 25_000,
+    responseTimeoutMs: Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : 40_000,
     appCheckDebugToken: process.env.FIREBASE_APPCHECK_DEBUG_TOKEN?.trim() || undefined,
   };
 }

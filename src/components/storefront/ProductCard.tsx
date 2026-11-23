@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useOptionalCart } from '../../context/CartContext';
 import { formatNok } from '../../lib/format';
+import { VALIDATION_LIMITS, isValidImageUrl } from '../../lib/validators';
 import { DEFAULT_PRODUCT_IMAGE } from '../../types/domain';
 import type { Product } from '../../types/domain';
 
@@ -13,14 +14,16 @@ export interface ProductCardProps {
 
 export function ProductCard({ product, onAddToCart }: ProductCardProps) {
   const [imgError, setImgError] = useState(false);
-  const [addedFeedback, setAddedFeedback] = useState(false);
+  const [addedFeedback, setAddedFeedback] = useState<'added' | 'max-items' | null>(null);
   const optionalCart = useOptionalCart();
 
   useEffect(() => {
     setImgError(false);
   }, [product.imageUrl]);
 
-  const resolvedSrc = imgError || !product.imageUrl ? DEFAULT_PRODUCT_IMAGE : product.imageUrl;
+  const safeImageUrl =
+    product.imageUrl && isValidImageUrl(product.imageUrl) ? product.imageUrl.trim() : '';
+  const resolvedSrc = imgError || !safeImageUrl ? DEFAULT_PRODUCT_IMAGE : safeImageUrl;
   const inStock = product.stock > 0;
 
   const handleAddClick = () => {
@@ -29,10 +32,18 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
     }
     if (onAddToCart) {
       onAddToCart(product);
-    } else {
-      optionalCart?.addItem(product.id, 1);
+      setAddedFeedback('added');
+      return;
     }
-    setAddedFeedback(true);
+    if (optionalCart) {
+      const alreadyInCart = optionalCart.items.some((item) => item.productId === product.id);
+      if (!alreadyInCart && optionalCart.items.length >= VALIDATION_LIMITS.orderItemsMax) {
+        setAddedFeedback('max-items');
+        return;
+      }
+      optionalCart.addItem(product.id, 1);
+    }
+    setAddedFeedback('added');
   };
 
   return (
@@ -55,7 +66,7 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
         </div>
       </Link>
 
-      <div className="flex flex-1 flex-col p-5">
+      <div className="flex min-w-0 flex-1 flex-col p-5">
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-taupe">
             {product.categoryName}
@@ -71,12 +82,12 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
           to={`/produkt/${product.slug}`}
           className="mt-2 block focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bronze"
         >
-          <h3 className="font-serif text-2xl font-semibold text-espresso transition-colors hover:text-bronze">
+          <h3 className="wrap-anywhere font-serif text-2xl font-semibold text-espresso transition-colors hover:text-bronze">
             {product.title}
           </h3>
         </Link>
 
-        <p className="mt-2 line-clamp-2 flex-1 text-sm leading-relaxed text-charcoal">
+        <p className="mt-2 line-clamp-2 flex-1 wrap-anywhere text-sm leading-relaxed text-charcoal">
           {product.description}
         </p>
 
@@ -103,9 +114,14 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
           </Link>
         </div>
 
-        {addedFeedback && (
+        {addedFeedback === 'added' && (
           <p role="status" aria-live="polite" className="mt-2 text-xs font-medium text-success">
             Lagt i handlekurv
+          </p>
+        )}
+        {addedFeedback === 'max-items' && (
+          <p role="alert" className="mt-2 text-xs font-medium text-error">
+            Maks {VALIDATION_LIMITS.orderItemsMax} ulike produkter per bestilling.
           </p>
         )}
       </div>

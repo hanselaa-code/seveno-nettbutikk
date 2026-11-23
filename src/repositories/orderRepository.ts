@@ -34,6 +34,7 @@ import type {
 } from '../types/domain';
 import { FirestoreProductRepository, getProductRepository } from './productRepository';
 import type { IProductRepository } from './productRepository';
+import { assertBrowserOnline, runFirestoreWriteWithTimeout } from './firestoreUtils';
 
 export interface IOrderRepository {
   create(input: CreateOrderInput): Promise<Order>;
@@ -170,8 +171,9 @@ async function buildValidatedOrderPayload(
   const orderNumber = generateOrderNumber();
   const paymentReference = validated.paymentReference || orderNumber;
   const paymentStatus: OrderPaymentStatus =
-    validated.paymentStatus ??
-    (validated.paymentProvider === 'test_order' ? 'paid_test' : 'pending_provider');
+    validated.paymentProvider === 'test_order'
+      ? (validated.paymentStatus ?? 'paid_test')
+      : 'pending_provider';
   const status: OrderStatus = 'confirmed';
   const nowIso = new Date().toISOString();
 
@@ -200,25 +202,28 @@ export class FirestoreOrderRepository implements IOrderRepository {
   }
 
   async create(input: CreateOrderInput): Promise<Order> {
+    assertBrowserOnline();
     const built = await buildValidatedOrderPayload(input, this.productRepo);
     const docRef = doc(collection(this.db, 'orders'));
 
-    await setDoc(docRef, {
-      orderNumber: built.orderNumber,
-      ownerUid: built.validated.ownerUid,
-      customer: built.validated.customer,
-      shippingAddress: built.validated.shippingAddress,
-      items: built.orderItems,
-      subtotalNok: built.subtotalNok,
-      shippingNok: built.shippingNok,
-      mvaNok: built.mvaNok,
-      totalNok: built.totalNok,
-      paymentProvider: built.validated.paymentProvider,
-      paymentReference: built.paymentReference,
-      paymentStatus: built.paymentStatus,
-      status: built.status,
-      createdAt: serverTimestamp(),
-    });
+    await runFirestoreWriteWithTimeout(() =>
+      setDoc(docRef, {
+        orderNumber: built.orderNumber,
+        ownerUid: built.validated.ownerUid,
+        customer: built.validated.customer,
+        shippingAddress: built.validated.shippingAddress,
+        items: built.orderItems,
+        subtotalNok: built.subtotalNok,
+        shippingNok: built.shippingNok,
+        mvaNok: built.mvaNok,
+        totalNok: built.totalNok,
+        paymentProvider: built.validated.paymentProvider,
+        paymentReference: built.paymentReference,
+        paymentStatus: built.paymentStatus,
+        status: built.status,
+        createdAt: serverTimestamp(),
+      }),
+    );
 
     return {
       id: docRef.id,

@@ -23,6 +23,7 @@ import type {
   UpdateProductInput,
 } from '../types/domain';
 import { getStarterProducts } from './seedCatalog';
+import { assertBrowserOnline, runFirestoreWriteWithTimeout } from './firestoreUtils';
 
 export interface IProductRepository {
   listAll(): Promise<Product[]>;
@@ -202,7 +203,7 @@ export class FirestoreProductRepository implements IProductRepository {
       updatedAt: serverTimestamp(),
     };
 
-    await setDoc(docRef, firestorePayload);
+    await runFirestoreWriteWithTimeout(() => setDoc(docRef, firestorePayload));
 
     return {
       id: docRef.id,
@@ -222,6 +223,7 @@ export class FirestoreProductRepository implements IProductRepository {
   }
 
   async update(id: string, input: UpdateProductInput): Promise<Product> {
+    assertBrowserOnline();
     const existing = await this.getById(id);
     if (!existing) {
       throw new Error(`Produkt med ID "${id}" ble ikke funnet.`);
@@ -249,19 +251,21 @@ export class FirestoreProductRepository implements IProductRepository {
     const nowIso = new Date().toISOString();
 
     const docRef = doc(this.db, 'products', existing.id);
-    await updateDoc(docRef, {
-      slug: normalized.slug,
-      title: normalized.title,
-      categorySlug: normalized.categorySlug,
-      categoryName,
-      description: normalized.description,
-      priceNok: normalized.priceNok,
-      stock: normalized.stock,
-      imageUrl: normalized.imageUrl,
-      specs: normalized.specs,
-      active: normalized.active,
-      updatedAt: serverTimestamp(),
-    });
+    await runFirestoreWriteWithTimeout(() =>
+      updateDoc(docRef, {
+        slug: normalized.slug,
+        title: normalized.title,
+        categorySlug: normalized.categorySlug,
+        categoryName,
+        description: normalized.description,
+        priceNok: normalized.priceNok,
+        stock: normalized.stock,
+        imageUrl: normalized.imageUrl,
+        specs: normalized.specs,
+        active: normalized.active,
+        updatedAt: serverTimestamp(),
+      }),
+    );
 
     return {
       id: existing.id,
@@ -285,7 +289,7 @@ export class FirestoreProductRepository implements IProductRepository {
     if (!trimmed) {
       throw new Error('Ugyldig produkt-ID.');
     }
-    await deleteDoc(doc(this.db, 'products', trimmed));
+    await runFirestoreWriteWithTimeout(() => deleteDoc(doc(this.db, 'products', trimmed)));
   }
 }
 

@@ -25,7 +25,7 @@ export const VALIDATION_LIMITS = {
   productSpecMaxLen: 200,
   imageUrlMax: 500,
   orderItemsMin: 1,
-  orderItemsMax: 50,
+  orderItemsMax: 4,
   orderItemQtyMax: 100,
   customerNameMin: 2,
   customerNameMax: 100,
@@ -151,10 +151,10 @@ export function validateProductInput(
   if (
     typeof input.priceNok !== 'number' ||
     !Number.isFinite(input.priceNok) ||
-    input.priceNok <= 0 ||
+    input.priceNok < 1 ||
     input.priceNok > VALIDATION_LIMITS.productPriceMax
   ) {
-    errors.priceNok = `Pris må være et positivt tall opptil ${VALIDATION_LIMITS.productPriceMax} kr.`;
+    errors.priceNok = `Pris må være minst 1 kr og opptil ${VALIDATION_LIMITS.productPriceMax} kr.`;
   }
 
   if (
@@ -286,6 +286,13 @@ export function validateOrderInput(input: CreateOrderInput): ValidationResult<Cr
     if (input.paymentStatus !== 'paid_test' && input.paymentStatus !== 'pending_provider') {
       errors.paymentStatus =
         'Ugyldig betalingsstatus ved opprettelse av bestilling (kun paid_test eller pending_provider er tillatt).';
+    } else if (
+      input.paymentStatus === 'paid_test' &&
+      isPaymentProviderId(input.paymentProvider) &&
+      input.paymentProvider !== 'test_order'
+    ) {
+      errors.paymentStatus =
+        'Kun testbestilling kan opprettes med betalingsstatus paid_test.';
     } else {
       normalizedPaymentStatus = input.paymentStatus;
     }

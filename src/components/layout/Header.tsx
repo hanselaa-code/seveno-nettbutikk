@@ -16,6 +16,7 @@ interface NavItem {
 
 const DESKTOP_NAV_ITEMS: readonly NavItem[] = [
   { label: 'Hjem', to: '/', end: true },
+  { label: 'Alle', to: '/kategori/alle' },
   { label: 'Seveno living', to: '/kategori/seveno-living' },
   { label: 'Seveno home', to: '/kategori/seveno-home' },
   { label: 'Seveno outdoor', to: '/kategori/seveno-outdoor' },
@@ -63,6 +64,7 @@ export function Header({ cartCount, onCartClick }: HeaderProps) {
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.preventDefault();
         setMobileOpen(false);
         menuButtonRef.current?.focus();
         return;
@@ -143,13 +145,13 @@ export function Header({ cartCount, onCartClick }: HeaderProps) {
   return (
     <>
       <header className="sticky top-0 z-40 border-b border-sand bg-canvas/95 backdrop-blur-sm">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:h-[68px] sm:px-6 lg:px-8">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-2 px-3 sm:h-[68px] sm:gap-3 sm:px-6 lg:px-8">
           <Link
             to="/"
             aria-label="Seveno forside"
             className="shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bronze"
           >
-            <div className="h-10 w-32 overflow-hidden sm:h-11 sm:w-36 lg:w-40">
+            <div className="h-9 w-24 overflow-hidden sm:h-11 sm:w-36 lg:w-40">
               <img
                 src="/images/seveno-logo.jpg"
                 alt="Seveno logo"
@@ -166,15 +168,15 @@ export function Header({ cartCount, onCartClick }: HeaderProps) {
             ))}
           </nav>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             <button
               type="button"
               onClick={handleCartClick}
               aria-label={`Handlekurv (${resolvedCartCount} ${resolvedCartCount === 1 ? 'vare' : 'varer'})`}
-              className="relative inline-flex min-h-[40px] shrink-0 items-center gap-2 rounded-md border border-sand bg-ivory px-3 py-2 text-xs font-medium text-espresso transition-colors hover:border-bronze hover:bg-linen focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bronze sm:text-sm"
+              className="relative inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-md border border-sand bg-ivory px-2.5 py-2 text-xs font-medium text-espresso transition-colors hover:border-bronze hover:bg-linen focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bronze sm:gap-2 sm:px-3 sm:text-sm"
             >
               <ShoppingBag className="h-4 w-4 text-bronze" aria-hidden="true" />
-              <span>Handlekurv</span>
+              <span className="hidden min-[360px]:inline">Handlekurv</span>
               <span
                 data-testid="cart-badge"
                 className="inline-flex min-w-5 items-center justify-center rounded-full bg-bronze px-1.5 py-0.5 text-[11px] font-semibold leading-none text-white"

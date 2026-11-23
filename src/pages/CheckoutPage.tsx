@@ -7,7 +7,7 @@ import { PaymentSelector } from '../components/checkout/PaymentSelector';
 import { useOptionalCart } from '../context/CartContext';
 import { useOptionalCatalog } from '../context/CatalogContext';
 import { FREE_SHIPPING_THRESHOLD_NOK, formatNok } from '../lib/format';
-import { ValidationError, validateOrderInput } from '../lib/validators';
+import { VALIDATION_LIMITS, ValidationError, validateOrderInput } from '../lib/validators';
 import { getOrderRepository, resolveCheckoutOwnerUid } from '../repositories/orderRepository';
 import type { IOrderRepository } from '../repositories/orderRepository';
 import { createDefaultPaymentRegistry } from '../services/payments/registry';
@@ -155,35 +155,54 @@ export function CheckoutPage({
     try {
       const provider = registry.get(selectedProviderId);
 
-      if (provider.mode === 'live' && !catalogLoading) {
-        const unavailable = resolvedItems.find((item) => !item.available);
-        if (unavailable) {
+      if (catalogLoading) {
+        throw new ValidationError(
+          'Produktkatalogen lastes fortsatt inn.',
+          {
+            items: 'Produktkatalogen lastes fortsatt inn. Vent et øyeblikk og prøv igjen.',
+          },
+        );
+      }
+
+      const unavailable = resolvedItems.find((item) => !item.available);
+      if (unavailable) {
+        throw new ValidationError(
+          `Produktet "${unavailable.productId}" er ikke tilgjengelig.`,
+          {
+            items: `Produktet "${unavailable.product?.title ?? unavailable.productId}" er ikke lenger tilgjengelig.`,
+          },
+        );
+      }
+
+      const overStock = resolvedItems.find((item) => item.exceedsStock);
+      if (overStock && overStock.product) {
+        throw new ValidationError(
+          `Utilstrekkelig lagerbeholdning for "${overStock.product.title}".`,
+          {
+            items: `Bare ${overStock.product.stock} stk på lager for "${overStock.product.title}". Juster antallet før du fullfører bestillingen.`,
+          },
+        );
+      }
+
+      const sessionItems = resolvedItems.map((item) => {
+        if (!item.product || item.unitPriceNok <= 0) {
           throw new ValidationError(
-            `Produktet "${unavailable.productId}" er ikke tilgjengelig.`,
+            `Produktet "${item.productId}" er ikke tilgjengelig.`,
             {
-              items: `Produktet "${unavailable.product?.title ?? unavailable.productId}" er ikke lenger tilgjengelig.`,
+              items: `Produktet "${item.product?.title ?? item.productId}" er ikke lenger tilgjengelig.`,
             },
           );
         }
-      }
+        return {
+          productId: item.product.id,
+          title: item.product.title,
+          quantity: item.quantity,
+          unitPriceNok: item.unitPriceNok,
+        };
+      });
 
       const ownerUid = await (resolveOwnerUid ?? resolveCheckoutOwnerUid)();
       const resolvedOrderRepo = orderRepo ?? getOrderRepository();
-
-      const sessionItems =
-        resolvedItems.length > 0
-          ? resolvedItems.map((item) => ({
-              productId: item.productId,
-              title: item.product?.title ?? item.productId,
-              quantity: item.quantity,
-              unitPriceNok: item.unitPriceNok > 0 ? item.unitPriceNok : 1,
-            }))
-          : cartItems.map((item) => ({
-              productId: item.productId,
-              title: item.productId,
-              quantity: item.quantity,
-              unitPriceNok: 1,
-            }));
 
       const session = await provider.createSession({
         items: sessionItems,
@@ -194,7 +213,9 @@ export function CheckoutPage({
       const authResult = await provider.authorizePayment(session.sessionId);
       const paymentReference = authResult.reference || session.reference;
       const createPaymentStatus: 'paid_test' | 'pending_provider' =
-        authResult.orderPaymentStatus === 'paid_test' ? 'paid_test' : 'pending_provider';
+        selectedProviderId === 'test_order' && authResult.orderPaymentStatus === 'paid_test'
+          ? 'paid_test'
+          : 'pending_provider';
 
       const order = await resolvedOrderRepo.create({
         ownerUid,
@@ -235,6 +256,9 @@ export function CheckoutPage({
     'mt-1.5 w-full rounded-md border bg-canvas px-3.5 py-2.5 text-sm text-espresso placeholder:text-taupe/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bronze';
 
   const remainingForFreeShipping = Math.max(0, FREE_SHIPPING_THRESHOLD_NOK - subtotalNok);
+  const exceedsMaxOrderItems = cartItems.length > VALIDATION_LIMITS.orderItemsMax;
+  const isResolvingCatalogItems =
+    catalogLoading && resolvedItems.some((item) => !item.product);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8">
@@ -423,7 +447,6 @@ export function CheckoutPage({
                   type="text"
                   inputMode="numeric"
                   autoComplete="postal-code"
-                  maxLength={4}
                   value={postalCode}
                   onChange={(e) => {
                     setPostalCode(e.target.value);
@@ -511,11 +534,15 @@ export function CheckoutPage({
 
           <button
             type="submit"
-            disabled={submitting}
-            aria-busy={submitting}
+            disabled={submitting || catalogLoading}
+            aria-busy={submitting || catalogLoading}
             className="inline-flex min-h-[44px] w-full items-center justify-center rounded-md bg-bronze px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-bronze-deep focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bronze disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {submitting ? 'Fullfører bestilling ...' : 'Fullfør testbestilling'}
+            {submitting
+              ? 'Fullfører bestilling ...'
+              : catalogLoading
+                ? 'Laster produktkatalog ...'
+                : 'Fullfør testbestilling'}
           </button>
         </form>
 
@@ -530,70 +557,132 @@ export function CheckoutPage({
             Ordresammendrag
           </h2>
 
-          <ul className="mt-4 divide-y divide-sand">
-            {resolvedItems.map((item) => {
-              const title = item.product?.title ?? `Produkt (${item.productId})`;
-              return (
-                <li
-                  key={item.productId}
-                  className="flex items-start justify-between gap-3 py-3 text-sm"
+          {isResolvingCatalogItems ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-4 rounded-lg border border-sand bg-canvas p-4 text-sm text-taupe"
+            >
+              Laster ordresammendrag ...
+            </div>
+          ) : (
+            <>
+              {exceedsMaxOrderItems && (
+                <div
+                  role="alert"
+                  className="mt-4 rounded-md border border-error/30 bg-canvas px-3 py-2 text-xs font-medium text-error"
                 >
-                  <div className="min-w-0">
-                    <p className="font-medium text-espresso">{title}</p>
-                    <p className="mt-0.5 text-xs text-taupe tabular-nums">
-                      {item.quantity} × {formatNok(item.unitPriceNok)}
-                    </p>
-                    {!item.available && !catalogLoading && (
-                      <div className="mt-1 flex items-center gap-2">
-                        <span className="text-xs font-medium text-error">
-                          Ikke lenger tilgjengelig
-                        </span>
-                        {optionalCart && (
-                          <button
-                            type="button"
-                            onClick={() => optionalCart.removeItem(item.productId)}
-                            className="text-xs font-medium text-error underline underline-offset-4 hover:text-espresso"
-                          >
-                            Fjern
-                          </button>
+                  Maks {VALIDATION_LIMITS.orderItemsMax} ulike produkter kan bestilles samtidig.
+                  Fjern {cartItems.length - VALIDATION_LIMITS.orderItemsMax} produkt(er) før betaling.
+                </div>
+              )}
+              <ul className="mt-4 divide-y divide-sand">
+                {resolvedItems.map((item) => {
+                  const title = item.product?.title ?? `Produkt (${item.productId})`;
+                  return (
+                    <li
+                      key={item.productId}
+                      className="flex items-start justify-between gap-3 py-3 text-sm"
+                    >
+                      <div className="min-w-0">
+                        <p className="wrap-anywhere font-medium text-espresso">{title}</p>
+                        <p className="mt-0.5 text-xs text-taupe tabular-nums">
+                          {item.quantity} × {formatNok(item.unitPriceNok)}
+                        </p>
+                        {!item.available && !catalogLoading && (
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-medium text-error">
+                              Ikke lenger tilgjengelig
+                            </span>
+                            {optionalCart && (
+                              <button
+                                type="button"
+                                onClick={() => optionalCart.removeItem(item.productId)}
+                                className="text-xs font-medium text-error underline underline-offset-4 hover:text-espresso"
+                              >
+                                Fjern
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {item.exceedsStock && !catalogLoading && item.product && (
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-medium text-error">
+                              Bare {item.product.stock} stk på lager
+                            </span>
+                            {optionalCart && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    optionalCart.updateQuantity(
+                                      item.productId,
+                                      item.product!.stock,
+                                    )
+                                  }
+                                  className="text-xs font-medium text-bronze underline underline-offset-4 hover:text-espresso"
+                                >
+                                  Juster til maks ({item.product.stock})
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => optionalCart.removeItem(item.productId)}
+                                  className="text-xs font-medium text-error underline underline-offset-4 hover:text-espresso"
+                                >
+                                  Fjern
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        {exceedsMaxOrderItems && item.available && !item.exceedsStock && optionalCart && (
+                          <div className="mt-1">
+                            <button
+                              type="button"
+                              onClick={() => optionalCart.removeItem(item.productId)}
+                              className="text-xs font-medium text-error underline underline-offset-4 hover:text-espresso"
+                            >
+                              Fjern
+                            </button>
+                          </div>
                         )}
                       </div>
-                    )}
-                  </div>
-                  <span className="shrink-0 font-semibold text-espresso tabular-nums">
-                    {formatNok(item.lineTotalNok)}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
+                      <span className="shrink-0 font-semibold text-espresso tabular-nums">
+                        {formatNok(item.lineTotalNok)}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
 
-          {subtotalNok > 0 && remainingForFreeShipping > 0 && (
-            <p className="mt-4 rounded-md border border-sand bg-linen px-3 py-2 text-xs text-espresso">
-              Handle for {formatNok(remainingForFreeShipping)} mer for gratis frakt
-            </p>
+              {subtotalNok > 0 && remainingForFreeShipping > 0 && (
+                <p className="mt-4 rounded-md border border-sand bg-linen px-3 py-2 text-xs text-espresso">
+                  Handle for {formatNok(remainingForFreeShipping)} mer for gratis frakt
+                </p>
+              )}
+
+              <dl className="mt-4 space-y-2 border-t border-sand pt-4 text-sm">
+                <div className="flex items-center justify-between text-charcoal">
+                  <dt>Delsum</dt>
+                  <dd className="tabular-nums">{formatNok(subtotalNok)}</dd>
+                </div>
+                <div className="flex items-center justify-between text-charcoal">
+                  <dt>Frakt</dt>
+                  <dd className="tabular-nums">
+                    {shippingNok === 0 ? 'Gratis frakt' : formatNok(shippingNok)}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between text-xs text-taupe">
+                  <dt>Herav mva (25 %)</dt>
+                  <dd className="tabular-nums">{formatNok(mvaNok)}</dd>
+                </div>
+                <div className="flex items-center justify-between border-t border-sand pt-2 text-base font-semibold text-espresso">
+                  <dt>Totalt</dt>
+                  <dd className="tabular-nums">{formatNok(totalNok)}</dd>
+                </div>
+              </dl>
+            </>
           )}
-
-          <dl className="mt-4 space-y-2 border-t border-sand pt-4 text-sm">
-            <div className="flex items-center justify-between text-charcoal">
-              <dt>Delsum</dt>
-              <dd className="tabular-nums">{formatNok(subtotalNok)}</dd>
-            </div>
-            <div className="flex items-center justify-between text-charcoal">
-              <dt>Frakt</dt>
-              <dd className="tabular-nums">
-                {shippingNok === 0 ? 'Gratis frakt' : formatNok(shippingNok)}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between text-xs text-taupe">
-              <dt>Herav mva (25 %)</dt>
-              <dd className="tabular-nums">{formatNok(mvaNok)}</dd>
-            </div>
-            <div className="flex items-center justify-between border-t border-sand pt-2 text-base font-semibold text-espresso">
-              <dt>Totalt</dt>
-              <dd className="tabular-nums">{formatNok(totalNok)}</dd>
-            </div>
-          </dl>
         </aside>
       </div>
     </div>

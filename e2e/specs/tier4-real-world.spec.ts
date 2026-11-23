@@ -46,9 +46,11 @@ test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
     await getCategoryCardLink(page, /Seveno outdoor/i, 'seveno-outdoor').click();
     await getProductLinkByTitle(page, STARTER_PRODUCTS.pergola.title).click();
     await page.getByRole('button', { name: /legg i handlekurv/i }).first().click();
+    await expect(getCartButton(page)).toContainText(/1/);
 
     // Discover Army sekk in Seveno living
     await addProductToCartFromCatalog(page, STARTER_PRODUCTS.armySekk);
+    await expect(getCartButton(page)).toContainText(/2/);
 
     // Increment Army sekk to qty 2 in Cart Drawer
     const drawer = await openCartDrawer(page);
@@ -58,6 +60,8 @@ test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
       .click();
 
     await expect(getCartButton(page)).toContainText(/3/);
+    await drawer.getByRole('button', { name: /lukk handlekurv/i }).first().click();
+    await expect(drawer).toBeHidden();
 
     const { orderNumber, confirmationText } = await submitOrderAndReadConfirmation(
       page,
@@ -70,6 +74,7 @@ test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
     expect(confirmationText).toContain(STARTER_PRODUCTS.armySekk.title);
 
     // Verify cart resets to empty
+    await expect(getCartButton(page)).toContainText(/0/);
     await page.reload();
     const reopened = await openCartDrawer(page);
     await expect(reopened).toContainText(/tom|ingen varer/i);
@@ -78,12 +83,14 @@ test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
   });
 
   test('T4-02 Mobile Shopper (390x844) -> AI Inquiry -> Klarna Checkout', async ({ page }) => {
+    test.setTimeout(75_000);
     const monitor = attachRuntimeMonitor(page);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/');
 
     await navigateStorefront(page, /Seveno home/i);
     await expect(page).toHaveURL(/\/kategori\/seveno-home/);
+    await expect(page.locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 15_000 });
     await expectNoHorizontalOverflow(page);
     await expectHealthyLogoAndImages(page);
 
@@ -98,6 +105,7 @@ test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
     await closeAiPanelIfOpen(page);
 
     await page.getByRole('button', { name: /legg i handlekurv/i }).first().click();
+    await expect(getCartButton(page)).toContainText(/1/);
     const { orderNumber, confirmationText } = await submitOrderAndReadConfirmation(page, 'klarna');
     expect(orderNumber).toMatch(/^SEV-\d{4}-[A-Z0-9]{4}$/);
     expect(confirmationText).toMatch(/Klarna/i);
@@ -108,6 +116,7 @@ test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
   test('T4-03 Pre-Purchase Inquiry Recovery (/kontakt) + AI Product Comparison', async ({
     page,
   }) => {
+    test.setTimeout(75_000);
     const monitor = attachRuntimeMonitor(page);
     await page.goto('/kontakt');
 
@@ -118,6 +127,7 @@ test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
     await contact.message.fill('Lurer på forskjellen på Army sekk og Pergola.');
     await contact.submit.click();
 
+    await expect(contact.email).toHaveAttribute('aria-invalid', 'true');
     await expect(
       page.getByText(/takk for din henvendelse|meldingen er sendt/i),
     ).toHaveCount(0);
@@ -142,6 +152,8 @@ test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
   test('T4-04 Store Admin Live Catalog Publication -> Storefront & AI Verification + Cleanup', async ({
     page,
   }, testInfo) => {
+    test.setTimeout(75_000);
+    const monitor = attachRuntimeMonitor(page);
     const adminCreds = await requireAdminCredsOrSkip(testInfo);
     const runId = makeRunId();
     const product = makeAdminTestProduct(runId, {
@@ -168,27 +180,36 @@ test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
     } finally {
       await deleteProductViaAdmin(page, product.title).catch(() => {});
     }
+
+    monitor.assertClean();
   });
 
   test('T4-05 Multi-Category Gift Shopper -> Cart Mutations, Reload Persistence & MVA Math', async ({
     page,
   }) => {
+    const monitor = attachRuntimeMonitor(page);
     await page.setViewportSize({ width: 1440, height: 900 });
 
     await addProductToCartFromCatalog(page, STARTER_PRODUCTS.armySekk);
+    await expect(getCartButton(page)).toContainText(/1/);
     await addProductToCartFromCatalog(page, STARTER_PRODUCTS.skobeholder);
+    await expect(getCartButton(page)).toContainText(/2/);
     await addProductToCartFromCatalog(page, STARTER_PRODUCTS.pergola);
+    await expect(getCartButton(page)).toContainText(/3/);
 
     const drawer = await openCartDrawer(page);
     const armyRow = getCartItemRow(drawer, STARTER_PRODUCTS.armySekk.title);
     await armyRow.getByRole('button', { name: /^\+$|øk/i }).first().click();
+    await expect(getCartButton(page)).toContainText(/4/);
     await armyRow.getByRole('button', { name: /^-|−$|reduser/i }).first().click();
+    await expect(getCartButton(page)).toContainText(/3/);
 
     await getCartItemRow(drawer, STARTER_PRODUCTS.pergola.title)
       .getByRole('button', { name: /fjern/i })
       .first()
       .click();
 
+    await expect(getCartButton(page)).toContainText(/2/);
     await page.reload();
     await expect(getCartButton(page)).toContainText(/2/);
 
@@ -199,6 +220,7 @@ test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
     expect(orderNumber).toMatch(/^SEV-\d{4}-[A-Z0-9]{4}$/);
 
     extractAndAssertOrderMath(confirmationText);
+    monitor.assertClean();
   });
 
   test('T4-06 Desktop & Mobile Visual, Brand, Contrast & Secret-Hygiene Audit Across All Public Routes', async ({
@@ -243,6 +265,7 @@ test.describe('Tier 4 — Real-World Norwegian E-Commerce Journeys', () => {
       await page.setViewportSize(vp);
       for (const route of publicRoutes) {
         await page.goto(route);
+        await expect(page.locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 15_000 });
         await expectHealthyLogoAndImages(page);
         await expectNoHorizontalOverflow(page);
         await expectBrandPaletteAndWcagContrast(page);
