@@ -19,7 +19,7 @@ export const STARTER_PRODUCTS: readonly CreateProductInput[] = [
       'Slitesterk og stilren nordisk ryggsekk i vokset kanvas og forsterket bunn. Designet for pendling, helgeturer og aktiv hverdag med egen polstret laptop-lomme og bronsedetaljer.',
     priceNok: 1890,
     stock: 18,
-    imageUrl: '/images/products/army-sekk.svg',
+    imageUrl: '/images/products/army-sekk.jpg',
     specs: [
       'Volum: 28 liter',
       'Materiale: Vokset kanvas og 1000D nylon',
@@ -38,7 +38,7 @@ export const STARTER_PRODUCTS: readonly CreateProductInput[] = [
       'Krystallklar og stabelbar oppbevaringsboks i 4 mm optisk akryl som beskytter skoene dine mot støv samtidig som de vises frem i entré eller garderobe. Utstyrt med magnetisk frontdør.',
     priceNok: 349,
     stock: 42,
-    imageUrl: '/images/products/skobeholder.svg',
+    imageUrl: '/images/products/skobeholder.jpg',
     specs: [
       'Mål: 36 × 28 × 22 cm',
       'Materiale: 4 mm optisk akryl',
@@ -57,7 +57,7 @@ export const STARTER_PRODUCTS: readonly CreateProductInput[] = [
       'Arkitektonisk pergola i pulverlakkert aluminium med trinnløst justerbare taklameller og skjult drenering i stolpene. Skaper en lun og værbestandig uteplass gjennom hele den nordiske sesongen.',
     priceNok: 24900,
     stock: 6,
-    imageUrl: '/images/products/pergola.svg',
+    imageUrl: '/images/products/pergola.jpg',
     specs: [
       'Mål: 300 × 400 × 250 cm',
       'Ramme: Pulverlakkert aluminium',

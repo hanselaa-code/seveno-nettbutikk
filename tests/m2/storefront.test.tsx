@@ -64,22 +64,66 @@ describe('Storefront UI & CatalogContext (M2)', () => {
     expect(screen.getByText('1 890 kr')).toBeInTheDocument();
     expect(screen.getByAltText('Army sekk')).toHaveAttribute(
       'src',
-      '/images/products/army-sekk.svg',
+      '/images/products/army-sekk.jpg',
     );
 
     expect(screen.getByText('Akryl gjennomsiktig skobeholder')).toBeInTheDocument();
     expect(screen.getByText('349 kr')).toBeInTheDocument();
     expect(screen.getByAltText('Akryl gjennomsiktig skobeholder')).toHaveAttribute(
       'src',
-      '/images/products/skobeholder.svg',
+      '/images/products/skobeholder.jpg',
     );
 
     expect(screen.getByText('Pergola')).toBeInTheDocument();
     expect(screen.getByText('24 900 kr')).toBeInTheDocument();
     expect(screen.getByAltText('Pergola')).toHaveAttribute(
       'src',
-      '/images/products/pergola.svg',
+      '/images/products/pergola.jpg',
     );
+  });
+
+  it('navigates between news slides in the Hero carousel', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <CatalogProvider>
+          <CartProvider>
+            <HomePage />
+          </CartProvider>
+        </CatalogProvider>
+      </MemoryRouter>,
+    );
+
+    expect(
+      screen.getByRole('heading', {
+        name: /Tidløs nordisk estetikk for hjem, livsstil og uterom/i,
+        level: 1,
+      }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Neste nyhet' }));
+    expect(
+      screen.getByRole('heading', {
+        name: /Arkitektonisk pergola for nordisk vær og lange kvelder/i,
+        level: 1,
+      }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /Hjem & orden/i }));
+    expect(
+      screen.getByRole('heading', {
+        name: /Krystallklar orden i entré og garderobe/i,
+        level: 1,
+      }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Forrige nyhet' }));
+    expect(
+      screen.getByRole('heading', {
+        name: /Arkitektonisk pergola for nordisk vær og lange kvelder/i,
+        level: 1,
+      }),
+    ).toBeInTheDocument();
   });
 
   it('filters products on CategoryPage for each category slug, "alle", and unknown slug', () => {

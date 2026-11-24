@@ -36,9 +36,9 @@ type AdminTab = 'products' | 'orders' | 'messages';
 
 export const PRODUCT_IMAGE_PRESETS = [
   { value: DEFAULT_PRODUCT_IMAGE, label: 'Standard Seveno-illustrasjon' },
-  { value: '/images/products/army-sekk.svg', label: 'Army sekk' },
-  { value: '/images/products/skobeholder.svg', label: 'Akryl skobeholder' },
-  { value: '/images/products/pergola.svg', label: 'Pergola' },
+  { value: '/images/products/army-sekk.jpg', label: 'Army sekk (foto)' },
+  { value: '/images/products/skobeholder.jpg', label: 'Akryl skobeholder (foto)' },
+  { value: '/images/products/pergola.jpg', label: 'Pergola (foto)' },
 ] as const;
 
 const PRESET_IMAGE_VALUES: readonly string[] = PRODUCT_IMAGE_PRESETS.map((item) => item.value);

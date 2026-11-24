@@ -4,10 +4,19 @@ import { Link } from 'react-router-dom';
 import { CATEGORIES, DEFAULT_PRODUCT_IMAGE } from '../../types/domain';
 import type { CategorySlug } from '../../types/domain';
 
-const CATEGORY_PREVIEW_IMAGE: Record<CategorySlug, string> = {
-  'seveno-living': '/images/products/army-sekk.svg',
-  'seveno-home': '/images/products/skobeholder.svg',
-  'seveno-outdoor': '/images/products/pergola.svg',
+const CATEGORY_PREVIEW_IMAGE: Record<CategorySlug, { src: string; alt: string }> = {
+  'seveno-living': {
+    src: '/images/categories/seveno-living.jpg',
+    alt: 'Nordisk livsstil med person langs fjorden som bærer olivengrønn Army sekk — Seveno living',
+  },
+  'seveno-home': {
+    src: '/images/categories/seveno-home.jpg',
+    alt: 'Ryddig nordisk entré og garderobe med person som organiserer sko i gjennomsiktige akryl skobeholdere — Seveno home',
+  },
+  'seveno-outdoor': {
+    src: '/images/categories/seveno-outdoor.jpg',
+    alt: 'Venner som nyter kveldssol og kaffe under moderne nordisk pergola på treterrasse — Seveno outdoor',
+  },
 };
 
 interface CategoryCardImageProps {
@@ -69,8 +78,8 @@ export function CategoryCards() {
           >
             <div className="aspect-[16/10] w-full overflow-hidden border-b border-sand bg-ivory">
               <CategoryCardImage
-                src={CATEGORY_PREVIEW_IMAGE[category.slug]}
-                alt={`Illustrasjon for ${category.name}`}
+                src={CATEGORY_PREVIEW_IMAGE[category.slug].src}
+                alt={CATEGORY_PREVIEW_IMAGE[category.slug].alt}
               />
             </div>
 
